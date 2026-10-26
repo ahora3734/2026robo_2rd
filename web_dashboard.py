@@ -77,6 +77,8 @@ telemetry_data = {
     "cross_track_m": None,
     "lidar_front": 0.0,
     "vision": "CLEAR",
+    "pot_raw": 2048,
+    "steer_cur": 0.0,
 }
 
 app = Flask(__name__)
@@ -103,32 +105,32 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
 #slam{width:100%;height:100%;display:block;background:#050508}
 
 /* Cyberpunk Dashboard Styles */
-.dash-container { width:100%; height:100%; display:flex; flex-direction:column; padding:15px; gap:15px; background: radial-gradient(circle at center, #15151a, #08080a); }
-.dash-top { display:flex; align-items:center; justify-content:center; gap:30px; margin-bottom:5px; }
+.dash-container { width:100%; height:100%; display:flex; flex-direction:column; padding:12px; gap:10px; justify-content:space-between; background: radial-gradient(circle at center, #15151a, #08080a); }
+.dash-top { display:flex; align-items:center; justify-content:center; gap:30px; margin-bottom:2px; }
 
 /* Ring Gauge for PWM */
-.gauge-container { position:relative; width:120px; height:120px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:#111; box-shadow: 0 0 20px rgba(0, 255, 102, 0.2); }
+.gauge-container { position:relative; width:110px; height:110px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:#111; box-shadow: 0 0 20px rgba(0, 255, 102, 0.2); }
 .gauge-ring { position:absolute; width:100%; height:100%; border-radius:50%; background: conic-gradient(#00ff66 0%, #222 0%); transition: background 0.2s ease-out; }
-.gauge-center { position:absolute; width:100px; height:100px; border-radius:50%; background:#0f0f13; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:2; box-shadow: inset 0 0 12px rgba(0,0,0,0.9); }
-.pwm-val { font-size:40px; font-weight:900; color:#00ff66; text-shadow:0 0 10px rgba(0,255,102,0.7); line-height:1; }
-.pwm-unit { font-size:12px; color:#888; letter-spacing:1px; margin-top:4px; }
+.gauge-center { position:absolute; width:90px; height:90px; border-radius:50%; background:#0f0f13; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:2; box-shadow: inset 0 0 12px rgba(0,0,0,0.9); }
+.pwm-val { font-size:36px; font-weight:900; color:#00ff66; text-shadow:0 0 10px rgba(0,255,102,0.7); line-height:1; }
+.pwm-unit { font-size:11px; color:#888; letter-spacing:1px; margin-top:2px; }
 
 /* Status Badge & Mode */
-.dash-status { display:flex; flex-direction:column; gap:10px; align-items:flex-start; }
-.state-badge { font-size:18px; font-weight:bold; background:linear-gradient(90deg,#0055ff,#00aaff); padding:8px 24px; border-radius:4px; box-shadow:0 0 15px rgba(0,170,255,0.5); letter-spacing:1px; text-transform:uppercase; border: 1px solid #00ffff; }
-.mode-text { font-size:14px; color:#0ff; font-weight:bold; text-shadow:0 0 5px rgba(0,255,255,0.5); }
+.dash-status { display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+.state-badge { font-size:16px; font-weight:bold; background:linear-gradient(90deg,#0055ff,#00aaff); padding:6px 20px; border-radius:4px; box-shadow:0 0 15px rgba(0,170,255,0.5); letter-spacing:1px; text-transform:uppercase; border: 1px solid #00ffff; }
+.mode-text { font-size:13px; color:#0ff; font-weight:bold; text-shadow:0 0 5px rgba(0,255,255,0.5); }
 
 /* Sensor LEDs */
-.sensor-leds { display:flex; justify-content:center; gap:20px; background:rgba(0,0,0,0.5); padding:10px; border-radius:6px; border:1px solid #333; }
-.led-item { display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc; font-weight:bold; letter-spacing:1px; }
-.led { width:12px; height:12px; border-radius:50%; background:#ff003c; box-shadow:0 0 10px #ff003c; transition: 0.3s; }
+.sensor-leds { display:flex; justify-content:center; gap:20px; background:rgba(0,0,0,0.5); padding:8px; border-radius:6px; border:1px solid #333; }
+.led-item { display:flex; align-items:center; gap:8px; font-size:11px; color:#ccc; font-weight:bold; letter-spacing:1px; }
+.led { width:11px; height:11px; border-radius:50%; background:#ff003c; box-shadow:0 0 10px #ff003c; transition: 0.3s; }
 
-/* 2x2 Data Grid */
-.data-grid { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:10px; flex:1; }
-.data-card { background:rgba(255,255,255,0.03); border:1px solid #2a2a35; border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:center; align-items:center; transition:0.2s; box-shadow: inset 0 0 20px rgba(0,0,0,0.5); }
+/* 1-Row 4-Column Data Grid */
+.data-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; }
+.data-card { background:rgba(255,255,255,0.03); border:1px solid #2a2a35; border-radius:6px; padding:8px 4px; display:flex; flex-direction:column; justify-content:center; align-items:center; transition:0.2s; box-shadow: inset 0 0 15px rgba(0,0,0,0.5); }
 .data-card:hover { border-color:#00ffff; background:rgba(0,255,255,0.05); }
-.data-label { font-size:11px; color:#999; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }
-.data-value { font-size:24px; font-weight:bold; color:#fff; text-shadow:0 0 8px rgba(255,255,255,0.4); }
+.data-label { font-size:10px; color:#888; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; text-align:center; }
+.data-value { font-size:18px; font-weight:bold; color:#fff; text-shadow:0 0 8px rgba(255,255,255,0.4); text-align:center; }
 
 .nav-card{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:rgba(15,15,20,0.9);border:1px solid #00ffff;color:#eee;width:90%;max-width:390px;padding:10px;border-radius:8px;text-align:center;box-shadow:0 0 15px rgba(0,255,255,0.2)}
 .nav-title{font-weight:bold;font-size:13px;color:#fff}
@@ -141,6 +143,25 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
 .gps{position:absolute;bottom:7px;left:7px;z-index:1000;background:rgba(0,0,0,.8);padding:5px 8px;border-radius:4px;font-size:10px;color:#00ff00}
 .slam-label{position:absolute;right:8px;top:8px;z-index:5;background:rgba(0,0,0,.7);padding:5px 7px;border-radius:4px;font-size:10px;color:#0ff;border:1px solid #0ff}
 .legend{position:absolute;left:8px;bottom:8px;z-index:5;background:rgba(0,0,0,.7);padding:6px 8px;border-radius:4px;font-size:10px;color:#aaa}
+
+/* Steer Calibration Box */
+.steer-calibration-box { background:rgba(0,0,0,0.5); border:1px solid #00aaff; border-radius:6px; padding:10px 12px; display:flex; flex-direction:column; gap:8px; box-shadow:0 0 15px rgba(0,170,255,0.15); }
+.steer-calib-header { display:flex; justify-content:space-between; align-items:center; }
+.steer-title { font-size:11px; color:#00ffff; font-weight:bold; letter-spacing:0.5px; text-shadow:0 0 5px rgba(0,255,255,0.4); }
+.steer-align-badge { font-size:11px; font-weight:bold; padding:2px 8px; border-radius:3px; background:#222; color:#aaa; border:1px solid #444; transition:0.2s; }
+.steer-align-badge.aligned { background:#00441b; color:#00ff66; border-color:#00ff66; box-shadow:0 0 10px rgba(0,255,102,0.5); }
+.steer-visual-bar-wrap { display:flex; align-items:center; gap:8px; }
+.steer-limit-label { font-size:10px; color:#888; width:48px; }
+.steer-limit-label.right { text-align:right; }
+.steer-bar-track { flex:1; height:12px; background:#111; border:1px solid #333; border-radius:6px; position:relative; overflow:hidden; }
+.steer-center-mark { position:absolute; left:50%; top:0; bottom:0; width:2px; background:#00ff66; transform:translateX(-50%); box-shadow:0 0 4px #00ff66; }
+.steer-indicator-pin { position:absolute; top:1px; bottom:1px; width:14px; margin-left:-7px; background:#00ffff; border-radius:4px; left:50%; box-shadow:0 0 8px #00ffff; transition:left 0.1s ease-out; }
+.steer-metrics { display:flex; justify-content:space-between; gap:6px; }
+.steer-metric-item { display:flex; flex-direction:column; align-items:center; flex:1; background:rgba(255,255,255,0.03); padding:4px 6px; border-radius:4px; border:1px solid #222; }
+.steer-metric-item .m-label { font-size:9px; color:#888; margin-bottom:2px; }
+.steer-metric-item .m-val { font-size:13px; font-weight:bold; color:#fff; }
+.steer-metric-item .m-val.pot { color:#ffea00; text-shadow:0 0 6px rgba(255,234,0,0.5); }
+.steer-metric-item .m-val.target { color:#00aaff; }
 </style>
 </head>
 <body>
@@ -200,6 +221,35 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
             <div class="led-item"><span class="led" id="led-lidar"></span> LiDAR</div>
             <div class="led-item"><span class="led" id="led-imu"></span> IMU</div>
             <div class="led-item"><span class="led" id="led-cam"></span> YOLO</div>
+        </div>
+
+        <div class="steer-calibration-box">
+            <div class="steer-calib-header">
+                <span class="steer-title">🎯 핸들 조향각 & 가변저항 캘리브레이션</span>
+                <span class="steer-align-badge" id="steer-align-badge">중앙 정렬 대기</span>
+            </div>
+            <div class="steer-visual-bar-wrap">
+                <span class="steer-limit-label">-35° (좌)</span>
+                <div class="steer-bar-track">
+                    <div class="steer-center-mark"></div>
+                    <div class="steer-indicator-pin" id="steer-pin"></div>
+                </div>
+                <span class="steer-limit-label right">+35° (우)</span>
+            </div>
+            <div class="steer-metrics">
+                <div class="steer-metric-item">
+                    <span class="m-label">실제 조향각</span>
+                    <span class="m-val" id="steer-angle-val">0.0°</span>
+                </div>
+                <div class="steer-metric-item">
+                    <span class="m-label">가변저항 ADC (Pin 32)</span>
+                    <span class="m-val pot" id="pot-adc-val">POT: 2048</span>
+                </div>
+                <div class="steer-metric-item">
+                    <span class="m-label">목표 조향각</span>
+                    <span class="m-val target" id="steer-target-val">0.0°</span>
+                </div>
+            </div>
         </div>
 
         <div class="data-grid">
@@ -475,6 +525,30 @@ function update(){
 
     document.getElementById('vision-val').innerText=(t.vision||'CLEAR');
 
+    // Steer & Potentiometer Calibration Update
+    const steerCur = Number(t.steer_cur != null ? t.steer_cur : (t.steer || 0));
+    const potVal = Number(t.pot_raw != null ? t.pot_raw : 2048);
+    const steerTarget = Number(t.steer || 0);
+
+    document.getElementById('steer-angle-val').innerText = (steerCur >= 0 ? '+' : '') + steerCur.toFixed(1) + '°';
+    document.getElementById('pot-adc-val').innerText = 'POT: ' + potVal;
+    document.getElementById('steer-target-val').innerText = (steerTarget >= 0 ? '+' : '') + steerTarget.toFixed(1) + '°';
+
+    const steerPercent = Math.min(100, Math.max(0, ((steerCur + 35.0) / 70.0) * 100));
+    document.getElementById('steer-pin').style.left = steerPercent + '%';
+
+    const badge = document.getElementById('steer-align-badge');
+    if (Math.abs(steerCur) <= 1.0) {
+        badge.innerText = '● ALIGN OK (정렬 완료)';
+        badge.className = 'steer-align-badge aligned';
+    } else if (steerCur > 1.0) {
+        badge.innerText = '▶ 우회전 ' + steerCur.toFixed(1) + '°';
+        badge.className = 'steer-align-badge';
+    } else {
+        badge.innerText = '◀ 좌회전 ' + steerCur.toFixed(1) + '°';
+        badge.className = 'steer-align-badge';
+    }
+
     // Sensor LEDs Update
     setLedStatus('led-gps', g.is_real_gps);
     setLedStatus('led-lidar', lidarFront > 0 && lidarFront < 12.0);
@@ -521,6 +595,7 @@ class WebDashboardNode(Node):
         self.create_subscription(OccupancyGrid, "/map", self.map_callback, map_qos)
         self.create_subscription(String, "/vehicle_status", self.status_callback, 10)
         self.create_subscription(String, "/imu_detail", self.imu_detail_callback, 10)
+        self.create_subscription(String, "/esp32_raw_status", self.esp32_raw_callback, 10)
 
         self.last_imu_time = 0.0
         self.get_logger().info("✅ Web Dashboard 관제탑 ROS 2 노드 구동 완료")
@@ -635,6 +710,19 @@ class WebDashboardNode(Node):
             with telemetry_lock:
                 if "heading_deg" in obj: telemetry_data["imu_heading"] = obj["heading_deg"]
                 if "heading_rate_dps" in obj: telemetry_data["imu_gz"] = obj["heading_rate_dps"]
+        except Exception:
+            pass
+
+    def esp32_raw_callback(self, msg: String):
+        try:
+            raw = msg.data.strip()
+            if raw.startswith("{") and raw.endswith("}"):
+                obj = json.loads(raw)
+                with telemetry_lock:
+                    if "pot" in obj:
+                        telemetry_data["pot_raw"] = int(obj["pot"])
+                    if "steer_cur" in obj:
+                        telemetry_data["steer_cur"] = float(obj["steer_cur"])
         except Exception:
             pass
 

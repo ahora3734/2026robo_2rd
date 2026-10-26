@@ -178,8 +178,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     "speed": 18.5,
                     "gear": "D",
                     "pwm": pwm,
-                    "speed_pwm": pwm,
                     "steer": steer,
+                    "steer_cur": steer,
+                    "pot_raw": int(2048 + (steer / 35.0) * 1400),
                     "state": "NAVIGATE",
                     "fusion_state": "NAVIGATE",
                     "status_msg": "정상 경로 추종 (가변저항 피드백 정렬 완료)",
@@ -245,6 +246,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
+    allow_reuse_address = True
 
 import sys
 if hasattr(sys.stdout, 'reconfigure'):
@@ -253,24 +255,48 @@ if hasattr(sys.stdout, 'reconfigure'):
     except Exception:
         pass
 
-def run_server():
-    server = ThreadedHTTPServer(("127.0.0.1", PORT), DashboardHandler)
-    print(f">> [Dashboard Server Ready] http://127.0.0.1:{PORT}")
-    server.serve_forever()
+def create_server(preferred_port=5000):
+    for p in range(preferred_port, preferred_port + 10):
+        try:
+            srv = ThreadedHTTPServer(("127.0.0.1", p), DashboardHandler)
+            return srv, p
+        except OSError:
+            continue
+    raise RuntimeError("5000~5009 포트를 모두 사용할 수 없습니다.")
+
+def open_browser(url):
+    time.sleep(0.4)
+    opened = False
+    try:
+        opened = webbrowser.open(url, new=2)
+    except Exception:
+        pass
+    if not opened and os.name == 'nt':
+        try:
+            os.system(f'start "" "{url}"')
+        except Exception:
+            pass
 
 if __name__ == "__main__":
-    t = threading.Thread(target=run_server, daemon=True)
-    t.start()
-    time.sleep(0.5)
-    
-    # 윈도우 기본 웹브라우저 자동 오픈
-    print(">> Opening browser: http://127.0.0.1:5000")
-    webbrowser.open(f"http://127.0.0.1:{PORT}")
-    
-    # 프로세스 유지
     try:
-        while True:
-            time.sleep(1)
+        server, actual_port = create_server(PORT)
+    except Exception as e:
+        print(f"❌ 서버 시작 실패: {e}")
+        sys.exit(1)
+
+    url = f"http://127.0.0.1:{actual_port}"
+    print(f"\n========================================================")
+    print(f"🚀 [자율주행 대시보드 미리보기 서버 가동]")
+    print(f"🌐 접속 URL: {url}")
+    print(f"👉 브라우저가 자동으로 뜨지 않으면 위 링크를 클릭하세요.")
+    print(f"🛑 종료하려면 터미널에서 Ctrl + C 를 누르세요.")
+    print(f"========================================================\n")
+
+    threading.Thread(target=open_browser, args=(url,), daemon=True).start()
+
+    try:
+        server.serve_forever()
     except KeyboardInterrupt:
-        print("Server stopped.")
+        print("\n서버가 안전하게 종료되었습니다.")
+
 

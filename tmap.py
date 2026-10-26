@@ -170,12 +170,12 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
 .led-item { display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc; font-weight:bold; letter-spacing:1px; }
 .led { width:12px; height:12px; border-radius:50%; background:#ff003c; box-shadow:0 0 10px #ff003c; transition: 0.3s; }
 
-/* 2x2 Data Grid */
-.data-grid { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:10px; flex:1; }
-.data-card { background:rgba(255,255,255,0.03); border:1px solid #2a2a35; border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:center; align-items:center; transition:0.2s; box-shadow: inset 0 0 20px rgba(0,0,0,0.5); }
+/* 1-Row 4-Column Data Grid */
+.data-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; }
+.data-card { background:rgba(255,255,255,0.03); border:1px solid #2a2a35; border-radius:6px; padding:8px 4px; display:flex; flex-direction:column; justify-content:center; align-items:center; transition:0.2s; box-shadow: inset 0 0 15px rgba(0,0,0,0.5); }
 .data-card:hover { border-color:#00ffff; background:rgba(0,255,255,0.05); }
-.data-label { font-size:11px; color:#999; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }
-.data-value { font-size:24px; font-weight:bold; color:#fff; text-shadow:0 0 8px rgba(255,255,255,0.4); }
+.data-label { font-size:10px; color:#888; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; text-align:center; }
+.data-value { font-size:18px; font-weight:bold; color:#fff; text-shadow:0 0 8px rgba(255,255,255,0.4); text-align:center; }
 
 .nav-card{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:rgba(15,15,20,0.9);border:1px solid #00ffff;color:#eee;width:90%;max-width:390px;padding:10px;border-radius:8px;text-align:center;box-shadow:0 0 15px rgba(0,255,255,0.2)}
 .nav-title{font-weight:bold;font-size:13px;color:#fff}

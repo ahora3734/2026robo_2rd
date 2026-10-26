@@ -173,7 +173,8 @@ flowchart TD
 | 파일명 | 역할 | 주 언어/포맷 | 주요 통신 및 연동 대상 |
 |---|---|---|---|
 | [`start.sh`](file:///c:/Users/포항고/Desktop/10.26_realcode/start.sh) | 전체 시스템 원클릭 백그라운드 구동 및 안전 종료 스크립트 | Bash | 모든 ROS 2 노드, 브라우저 자동 실행 |
-| [`esp32.ino`](file:///c:/Users/포항고/Desktop/10.26_realcode/esp32.ino) | ESP32 모터 제어 펌웨어 (PWM, DIR, 워치독) | C++ (Arduino) | ESP32 하드웨어, 시리얼 통신 |
+| [`esp32.ino`](file:///c:/Users/포항고/Desktop/10.26_realcode/esp32.ino) | (레거시 수동) ESP32 모터 제어 펌웨어 (오픈루프 On/Off 조향) | C++ (Arduino) | ESP32 하드웨어, 시리얼 통신 |
+| [`esp32_auto.ino`](file:///c:/Users/포항고/Desktop/10.26_realcode/esp32_auto.ino) | (자율주행 정밀제어) 32번 핀 가변저항 피드백 폐루프(Closed-loop) PID 조향 펌웨어 | C++ (Arduino) | 32번 핀 ADC, 모터 드라이버, 젯슨 시리얼 텔레메트리 |
 | [`esp32_bridge.py`](file:///c:/Users/포항고/Desktop/10.26_realcode/esp32_bridge.py) | ROS 2 ↔ ESP32 양방향 시리얼 통신 브릿지 | Python (ROS 2) | `/vehicle_cmd`, `/esp32_raw_status`, `/dev/esp32` |
 | [`lidar.py`](file:///c:/Users/포항고/Desktop/10.26_realcode/lidar.py) | 전방 180° 라이다 데이터 전처리, 노이즈 필터링, 장애물 분류 | Python (ROS 2) | `/scan` → `/obstacle_info`, `/scan_filtered` |
 | [`imu.py`](file:///c:/Users/포항고/Desktop/10.26_realcode/imu.py) | WitMotion WT901 (BMI160+RM3100) 9축 IMU 자동 보레이트 매칭, 11B 패킷 디코딩, 충격 감지 | Python (ROS 2) | `/dev/imu` → `/imu_heading`, `/imu_status`, `/imu_detail` |
@@ -224,7 +225,14 @@ flowchart TD
     - `target_steer_angle < -10.0`: 좌회전 (지정 속도 `MANUAL_STEER_PWM = 70`)
     - 데드존(-10.0 ~ 10.0): 정지 (PWM 0)
 
-#### 3) `esp32_bridge.py` (ROS 2 - ESP32 시리얼 통신 브릿지)
+#### 3) `esp32_auto.ino` (32번 핀 가변저항 피드백 폐루프 자율주행 펌웨어)
+- **32번 핀 아날로그 ADC 수신**: 핸들에 부착된 가변저항 값을 저주파 EMA 필터링(`0.8 * prev + 0.2 * raw`)을 거쳐 안정적인 현재 조향 각도(`current_steer_angle`, ±35.0°)로 변환.
+- **정지 시 조향 모터 완전 OFF (영점 캘리브레이션 모드)**: 차량이 정지 상태(`PWM == 0`)일 때는 조향 모터 전원을 완전히 차단하여, 정지 마찰력으로 인한 기어 파손을 방지하고 사용자가 손으로 자유롭게 핸들을 돌려가며 웹 대시보드 화면을 통해 가변저항 영점(`POT_CENTER`)을 쉽게 맞출 수 있도록 지원.
+- **폐루프(Closed-Loop) 비례 제어**: 주행 중(`PWM > 0`) 젯슨으로부터 전달된 목표 각도(`target_steer_angle`)와 현재 각도 오차(`error`)를 기반으로 조향 모터 속도 및 방향을 실시간 자동 조절. 불감대(`±1.0°`) 도달 시 모터 전원을 차단하여 발열 및 채터링 방지.
+- **스톨(Stall) 및 과회전 기어 파손 2중 방지**: 조향 모터가 1.5초 이상 연속 구동되어도 목표에 도달하지 못하면 기어 파손 방지를 위해 즉시 전원을 차단하며, 한계치(`POT_MIN_LIMIT: 600`, `POT_MAX_LIMIT: 3500`) 도달 시에도 즉각 정지.
+- **양방향 텔레메트리 피드백**: 초당 20회(20Hz) 현재 가변저항 값(`pot`) 및 실측 조향 각도(`steer_cur`)를 JSON 문자열로 전송하여 관제탑 웹 대시보드에 실시간 그래픽 게이지로 렌더링.
+
+#### 4) `esp32_bridge.py` (ROS 2 - ESP32 시리얼 통신 브릿지)
 - `/vehicle_cmd` 토픽의 JSON 메시지(`{"pwm": 150, "steer": -20.5}`)를 구독.
 - 통신 블로킹을 방지하기 위해 `timeout=0.05`, `write_timeout=0.05`를 적용하여 시리얼 객체를 유지.
 - 수신 시 포맷팅된 문자열을 ESP32에 전송하며, ESP32가 회신하는 텔레메트리를 읽어 `/esp32_raw_status` 토픽으로 발행.
