@@ -1,0 +1,40 @@
+slam_toolbox:
+  ros__parameters:
+    use_sim_time: false
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    
+    # ✅ 반복 경로 최적화: 이동/회전 조금만 해도 지도 갱신 (기존 0.05 → 0.03)
+    minimum_travel_distance: 0.03  # 기존: 0.05
+    minimum_travel_heading: 0.03   # 기존: 0.05
+    
+    map_update_interval: 2.0
+    transform_publish_period: 0.02
+    resolution: 0.05
+    max_laser_range: 12.0
+    minimum_time_interval: 0.2
+    transform_timeout: 0.2
+    base_frame: base_link
+    odom_frame: odom
+    map_frame: map
+    scan_topic: /scan_filtered
+    mode: mapping
+    debug_logging: false
+    throttle_scans: 1
+    use_scan_matching: true
+    use_scan_barycenter: true
+    
+    # ✅ 반복 경로 최적화: 중복 값 제거 (기존에 두 번 적혀있던 거 정리)
+    # minimum_travel_distance: 0.05  ← 중복 제거
+    # minimum_travel_heading: 0.05   ← 중복 제거
+    
+    # ✅ 반복 경로 최적화: 루프 클로징 강화
+    do_loop_closing: true
+    loop_search_maximum_distance: 5.0      # 기존 3.0 → 5.0으로 늘려서 루프 더 잘 찾음
+    loop_match_minimum_chain_size: 8       # 기존 10 → 8로 낮춰서 루프 더 잘 찾음
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
