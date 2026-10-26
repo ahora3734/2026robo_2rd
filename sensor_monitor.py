@@ -29,6 +29,7 @@ class SensorMonitor(Node):
             "/yolo_stream",
             "/vehicle_cmd",
             "/vehicle_status",
+            "/set_destination",
         ]
 
         self.last_seen = {}
@@ -107,6 +108,12 @@ class SensorMonitor(Node):
             String,
             "/vehicle_status",
             lambda m: self.touch("/vehicle_status", m.data),
+            10,
+        )
+        self.create_subscription(
+            String,
+            "/set_destination",
+            lambda m: self.touch("/set_destination", m.data),
             10,
         )
 

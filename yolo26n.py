@@ -16,7 +16,7 @@ from ultralytics import YOLO
 class YoloVisionNode(Node):
     def __init__(self):
         super().__init__("yolo_vision_node")
-        self.declare_parameter("model_path", "yolov8n.pt")
+        self.declare_parameter("model_path", "yolo26n.pt")
         self.declare_parameter("camera_id", "/dev/robot_cam")
         self.declare_parameter("frame_width", 640)
         self.declare_parameter("frame_height", 480)

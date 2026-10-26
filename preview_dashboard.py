@@ -86,19 +86,22 @@ if os.path.exists(CAM_IMAGE_PATH):
     with open(CAM_IMAGE_PATH, "rb") as f:
         cam_image_bytes = f.read()
 
-# tmap.py의 INDEX_HTML 직접 로드
+# web_dashboard.py (또는 tmap.py)의 INDEX_HTML 직접 로드
 INDEX_HTML = ""
-try:
-    with open(os.path.join(os.path.dirname(__file__), "tmap.py"), "r", encoding="utf-8") as f:
-        content = f.read()
-        start_marker = 'INDEX_HTML = r"""'
-        end_marker = '"""\n\nclass TmapRosBridge'
-        s = content.find(start_marker)
-        e = content.find(end_marker)
-        if s != -1 and e != -1:
-            INDEX_HTML = content[s + len(start_marker):e]
-except Exception as ex:
-    print(f"Error loading INDEX_HTML from tmap.py: {ex}")
+for fname, end_m in [("web_dashboard.py", '"""\n\nclass WebDashboardNode'), ("tmap.py", '"""\n\nclass TmapRosBridge')]:
+    fpath = os.path.join(os.path.dirname(__file__), fname)
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+                start_marker = 'INDEX_HTML = r"""'
+                s = content.find(start_marker)
+                e = content.find(end_m)
+                if s != -1 and e != -1:
+                    INDEX_HTML = content[s + len(start_marker):e]
+                    break
+        except Exception:
+            pass
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):

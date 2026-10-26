@@ -29,6 +29,8 @@ fuser -k -9 5000/tcp 2>/dev/null || true
 pkill -9 -f "python3.*lidar.py" 2>/dev/null || true
 pkill -9 -f "python3.*imu.py" 2>/dev/null || true
 pkill -9 -f "python3.*yolo26n.py" 2>/dev/null || true
+pkill -9 -f "python3.*gps_tmap_nav.py" 2>/dev/null || true
+pkill -9 -f "python3.*web_dashboard.py" 2>/dev/null || true
 pkill -9 -f "python3.*tmap.py" 2>/dev/null || true
 pkill -9 -f "python3.*main_fusion.py" 2>/dev/null || true
 pkill -9 -f "python3.*gps_imu_odom.py" 2>/dev/null || true
@@ -71,18 +73,23 @@ echo "🧠 [6/9] Main Fusion 제어 코어 구동"
 python3 -u "${SCRIPT_DIR}/main_fusion.py" > "${LOG_DIR}/main_fusion.log" 2>&1 &
 PID_MAIN=$!
 
-# [7/9] TMAP 웹 관제 서버
-echo "📡 [7/9] TMAP 통합 관제탑 구동"
-python3 -u "${SCRIPT_DIR}/tmap.py" > "${LOG_DIR}/tmap.log" 2>&1 &
-PID_TMAP=$!
+# [7/10] GPS & T-Map 전역 경로 계획 노드
+echo "🗺️  [7/10] GPS & T-Map 전역 경로 계획 노드 구동"
+python3 -u "${SCRIPT_DIR}/gps_tmap_nav.py" > "${LOG_DIR}/gps_tmap_nav.log" 2>&1 &
+PID_GPS_NAV=$!
 
-# [8/9] ESP32 모터 제어 브릿지
-echo "🔌 [8/9] ESP32 모터 제어 브릿지 구동"
+# [8/10] 통합 관제탑 웹 대시보드
+echo "📡 [8/10] 통합 관제탑 웹 대시보드 구동"
+python3 -u "${SCRIPT_DIR}/web_dashboard.py" > "${LOG_DIR}/web_dashboard.log" 2>&1 &
+PID_DASHBOARD=$!
+
+# [9/10] ESP32 모터 제어 브릿지
+echo "🔌 [9/10] ESP32 모터 제어 브릿지 구동"
 python3 -u "${SCRIPT_DIR}/esp32_bridge.py" > "${LOG_DIR}/esp32_bridge.log" 2>&1 &
 PID_ESP32=$!
 
-# [9/9] 센서 진단 모니터
-echo "📊 [9/9] 센서 상태 모니터링 데몬 구동"
+# [10/10] 센서 진단 모니터
+echo "📊 [10/10] 센서 상태 모니터링 데몬 구동"
 python3 -u "${SCRIPT_DIR}/sensor_monitor.py" > "${LOG_DIR}/sensor_monitor.log" 2>&1 &
 PID_MONITOR=$!
 
@@ -118,9 +125,11 @@ cleanup() {
   echo
   echo "🛑 Ctrl+C 입력 감지. 모든 센서와 프로세스를 안전하게 종료합니다..."
   kill -9 "${PID_LD19}" "${PID_LIDAR}" "${PID_IMU}" "${PID_VISION}" \
-          "${PID_ODOM}" "${PID_MAIN}" "${PID_TMAP}" "${PID_ESP32}" \
-          "${PID_MONITOR}" "${PID_SLAM}" 2>/dev/null || true
+          "${PID_ODOM}" "${PID_MAIN}" "${PID_GPS_NAV}" "${PID_DASHBOARD}" \
+          "${PID_ESP32}" "${PID_MONITOR}" "${PID_SLAM}" 2>/dev/null || true
   fuser -k -9 5000/tcp 2>/dev/null || true
+  pkill -9 -f "python3.*gps_tmap_nav.py" 2>/dev/null || true
+  pkill -9 -f "python3.*web_dashboard.py" 2>/dev/null || true
   pkill -9 -f "python3.*tmap.py" 2>/dev/null || true
   pkill -9 -f "slam_toolbox" 2>/dev/null || true
   pkill -9 -f "ldlidar" 2>/dev/null || true
