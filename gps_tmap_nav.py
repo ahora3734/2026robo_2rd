@@ -59,7 +59,7 @@ CAMPUS_ROUTES = {
         [36.0561904, 129.3718258], [36.0561421, 129.3718676], [36.0560777, 129.3719035],
         [36.0560052, 129.3719553], [36.0559134, 129.3720191], [36.0558490, 129.3720530],
         [36.0557810, 129.3720968], [36.0556847, 129.3721586], [36.0556154, 129.3721945],
-        [36.0555655, 129.3722284], [36.0552040, 129.3722603], [36.0554978, 129.3722742],
+        [36.0555655, 129.3722284], [36.0555204, 129.3722603], [36.0554978, 129.3722742],
         [36.0554428, 129.3723069]
     ],
     "START_TO_INTERSECTION": [
@@ -179,16 +179,18 @@ class GpsTmapNavNode(Node):
         target = wps[idx]
         d = self.haversine_m(lat, lon, target["lat"], target["lon"])
 
+        advanced = False
         with self.route_lock:
             self.route_data["dist_to_next_wp"] = round(d, 1)
             if d < 3.0 and idx < len(wps) - 1:
                 idx += 1
                 self.route_data["current_wp_idx"] = idx
                 target = wps[idx]
-                self.route_data["next_wp_desc"] = f"[{target['name']}] {target['desc']}"
-                self.publish_path_message(path, idx)
-            else:
-                self.route_data["next_wp_desc"] = f"[{target['name']}] {target['desc']}"
+                advanced = True
+            self.route_data["next_wp_desc"] = f"[{target['name']}] {target['desc']}"
+        # publish_path_message()가 route_lock을 다시 잡으므로 락 밖에서 호출 (데드락 방지)
+        if advanced:
+            self.publish_path_message(path, idx)
 
     def fetch_tmap_route(self, start_lat, start_lon):
         if not (self.tmap_app_key and self.dest_lat is not None and self.dest_lon is not None):
