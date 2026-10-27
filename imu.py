@@ -30,6 +30,11 @@ class ImuNode(Node):
         self.bump_pitch_deg = float(self.get_parameter("bump_pitch_deg").value)
         self.bump_accel_delta = float(self.get_parameter("bump_accel_delta_g").value)
 
+        # [REVIEW #10] 나침반 규약(시계방향 +)으로 맞추기 위한 yaw 반전 옵션
+        # 차를 손으로 오른쪽(시계방향)으로 돌렸을 때 /imu_heading이 '감소'하면 True로 설정
+        self.declare_parameter("invert_yaw", False)
+        self.invert_yaw = bool(self.get_parameter("invert_yaw").value)
+
         # ROS 2 토픽 퍼블리셔
         self.pub_status = self.create_publisher(String, "/imu_status", 10)
         self.pub_heading = self.create_publisher(Float32, "/imu_heading", 10)
@@ -109,17 +114,18 @@ class ImuNode(Node):
                         flag = pkt[1]
 
                         # 체크섬 검증
+                        # [REVIEW #16] 체크섬만으로 판정 (깨진 패킷의 yaw가 조향에 들어가는 것을 방지)
                         checksum_ok = ((sum(pkt[:10]) & 0xFF) == pkt[10])
-                        # 체크섬이 노이즈로 튀어도 다음 헤더가 0x55면 통과시키는 이중 방어
-                        framing_ok = (len(buf) >= 12 and buf[11] == 0x55)
 
-                        if checksum_ok or framing_ok:
+                        if checksum_ok:
                             # 1. 각도 패킷 (0x53 -> 방위각 계산)
                             if flag == 0x53:
                                 r, p, y = struct.unpack('<hhh', pkt[2:8])
                                 self.roll = round((r / 32768.0) * 180.0, 2)
                                 self.pitch = round((p / 32768.0) * 180.0, 2)
                                 raw_yaw = (y / 32768.0) * 180.0
+                                if self.invert_yaw:
+                                    raw_yaw = -raw_yaw
                                 self.current_yaw = round((raw_yaw + 360.0) % 360.0, 2)
                                 self._publish_telemetry()
 
@@ -127,6 +133,8 @@ class ImuNode(Node):
                             elif flag == 0x52:
                                 _, _, gz = struct.unpack('<hhh', pkt[2:8])
                                 self.filtered_gz = round((gz / 32768.0) * 2000.0, 2)
+                                if self.invert_yaw:
+                                    self.filtered_gz = -self.filtered_gz
 
                             # 3. 가속도 패킷 (0x51 -> 충격 감지)
                             elif flag == 0x51:

@@ -29,6 +29,10 @@ int POT_CENTER = 2048;
 int POT_MIN_LIMIT = 600;   // 최대 좌회전 또는 우회전 끝단 ADC
 int POT_MAX_LIMIT = 3500;  // 최대 우회전 또는 좌회전 끝단 ADC
 
+// [REVIEW #4] 각도 매핑 끝점(±MAX_STEER_ANGLE_DEG)을 한계점보다 안쪽에 두는 마진(ADC)
+// - 풀 조향 명령(±35°)이 곧바로 한계 차단에 걸리지 않도록 함
+int POT_LIMIT_MARGIN = 100;
+
 // 조향 불감대 (Deadband): 목표 각도와 오차가 이 범위 이내면 모터 정지 (모터 발열/떨림 방지)
 const float STEER_DEADBAND_DEG = 1.0; 
 
@@ -62,6 +66,18 @@ const unsigned long TELEMETRY_INTERVAL_MS = 50; // 20Hz 주기로 젯슨에 상�
 const unsigned long STEER_STALL_TIMEOUT_MS = 1500;
 unsigned long steer_motor_start_time = 0;
 
+// [REVIEW #5] 스톨 발생 시: 구동 모터까지 정지 + 텔레메트리 fault 보고 + 일정 시간 후 재시도
+const unsigned long STEER_STALL_COOLDOWN_MS = 1000;
+bool steer_stall_fault = false;
+unsigned long steer_stall_time = 0;
+
+// [REVIEW #24] 구동 모터 PWM 주파수 및 정/역 전환 데드타임
+// - 모터 드라이버가 지원하는 주파수인지 데이터시트 확인 (BTS7960 등은 ~25kHz 지원)
+#define MOTOR_PWM_FREQ_HZ  20000
+const unsigned long DRIVE_REVERSE_DEADTIME_MS = 150;
+int last_drive_dir = 0;                 // -1 후진, 0 정지, +1 전진
+unsigned long drive_reverse_start = 0;
+
 // --- [함수 프로토타입] ---
 void parseSerialDataSafe();
 void updatePotentiometer();
@@ -85,6 +101,14 @@ void setup() {
   stopAllMotors();
   is_armed = false;
 
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  // [REVIEW #24] 기본 ~1kHz는 가청 소음 -> 가청 대역 밖으로 (arduino-esp32 3.x API)
+  // stopAllMotors()의 analogWrite로 핀이 LEDC에 연결된 뒤에 설정해야 적용됨
+  analogWriteFrequency(LEFT_PWM_PIN, MOTOR_PWM_FREQ_HZ);
+  analogWriteFrequency(RIGHT_PWM_PIN, MOTOR_PWM_FREQ_HZ);
+  analogWriteFrequency(STEER_PWM_PIN, MOTOR_PWM_FREQ_HZ);
+#endif
+
   // 부팅 시 초기 가변저항 값 안정화
   delay(100);
   filtered_pot_adc = analogRead(POT_PIN);
@@ -106,8 +130,9 @@ void loop() {
     stopAllMotors();
   } else {
     if (is_armed) {
-      controlDriveMotors();
+      // 조향을 먼저 처리해야 스톨 발생 시 같은 주기에 구동 모터도 정지됨
       controlSteerClosedLoop();
+      controlDriveMotors();
     } else {
       stopAllMotors();
     }
@@ -123,46 +148,49 @@ void loop() {
 }
 
 // ==============================================================================
-// 1. 시리얼 수신 파서: <PWM,STEER> 및 w,PWM,STEER 모두 지원
+// 1. 시리얼 수신 파서: <PWM,STEER> 및 w,PWM,STEER 모두 지원 (C-스타일 고정 버퍼로 힙 단편화 원천 차단)
 // ==============================================================================
+static char rx_buf[64];
+static uint8_t rx_idx = 0;
+
 void parseSerialDataSafe() {
   while (Serial.available() > 0) {
-    String data = Serial.readStringUntil('\n');
-    data.trim();
-    if (data.length() == 0) continue;
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (rx_idx == 0) continue;
+      rx_buf[rx_idx] = '\0';
 
-    // 포맷 A: esp32_bridge.py 표준 규격 <PWM,STEER> (예: <120,-15.20>)
-    if (data.startsWith("<") && data.endsWith(">")) {
-      String payload = data.substring(1, data.length() - 1);
-      int comma = payload.indexOf(',');
-      if (comma > 0) {
-        String pwm_str = payload.substring(0, comma);
-        String steer_str = payload.substring(comma + 1);
+      int pwm_in = 0;
+      float steer_in = 0.0f;
+      bool valid = false;
 
-        target_drive_pwm = pwm_str.toInt();
-        target_steer_angle = steer_str.toFloat();
+      // 포맷 A: esp32_bridge.py 표준 규격 <PWM,STEER> (예: <120,-15.20>)
+      if (rx_buf[0] == '<') {
+        if (sscanf(rx_buf, "<%d,%f>", &pwm_in, &steer_in) == 2) {
+          valid = true;
+        }
+      }
+      // 포맷 B: 수동/키보드 명령 호환 w,PWM,STEER / s,PWM,STEER
+      else if (rx_buf[0] == 'w' || rx_buf[0] == 's') {
+        if (sscanf(rx_buf + 2, "%d,%f", &pwm_in, &steer_in) == 2) {
+          valid = true;
+        }
+      }
 
-        // 조향 목표각 안전 클램핑
-        target_steer_angle = constrain(target_steer_angle, -MAX_STEER_ANGLE_DEG, MAX_STEER_ANGLE_DEG);
-
+      if (valid) {
+        target_drive_pwm = pwm_in;
+        target_steer_angle = constrain(steer_in, -MAX_STEER_ANGLE_DEG, MAX_STEER_ANGLE_DEG);
         last_comm_time = millis();
         is_armed = true;
       }
-    }
-    // 포맷 B: 수동/키보드 명령 호환 w,PWM,STEER / s,PWM,STEER
-    else if (data.startsWith("w,") || data.startsWith("s,")) {
-      int firstComma = data.indexOf(',');
-      int secondComma = data.indexOf(',', firstComma + 1);
-      if (firstComma > 0 && secondComma > firstComma) {
-        String pwm_str = data.substring(firstComma + 1, secondComma);
-        String steer_str = data.substring(secondComma + 1);
 
-        target_drive_pwm = pwm_str.toInt();
-        target_steer_angle = steer_str.toFloat();
-        target_steer_angle = constrain(target_steer_angle, -MAX_STEER_ANGLE_DEG, MAX_STEER_ANGLE_DEG);
-
-        last_comm_time = millis();
-        is_armed = true;
+      rx_idx = 0; // 다음 수신을 위해 인덱스 리셋
+    } else {
+      if (rx_idx < sizeof(rx_buf) - 1) {
+        rx_buf[rx_idx++] = c;
+      } else {
+        // 비정상 패킷으로 인한 버퍼 오버플로우 방지
+        rx_idx = 0;
       }
     }
   }
@@ -178,11 +206,12 @@ void updatePotentiometer() {
   filtered_pot_adc = (filtered_pot_adc * 0.8f) + (raw_adc * 0.2f);
 
   // ADC 값 -> 조향 각도(-MAX_STEER ~ +MAX_STEER) 매핑
+  // [REVIEW #4] ±MAX_STEER는 한계점보다 POT_LIMIT_MARGIN만큼 안쪽에 대응시킴
   float angle = 0.0f;
   if (filtered_pot_adc >= POT_CENTER) {
-    angle = (float)(filtered_pot_adc - POT_CENTER) / (float)(POT_MAX_LIMIT - POT_CENTER) * MAX_STEER_ANGLE_DEG;
+    angle = (float)(filtered_pot_adc - POT_CENTER) / (float)((POT_MAX_LIMIT - POT_LIMIT_MARGIN) - POT_CENTER) * MAX_STEER_ANGLE_DEG;
   } else {
-    angle = -(float)(POT_CENTER - filtered_pot_adc) / (float)(POT_CENTER - POT_MIN_LIMIT) * MAX_STEER_ANGLE_DEG;
+    angle = -(float)(POT_CENTER - filtered_pot_adc) / (float)(POT_CENTER - (POT_MIN_LIMIT + POT_LIMIT_MARGIN)) * MAX_STEER_ANGLE_DEG;
   }
 
   if (REVERSE_POT_SENSOR) {
@@ -196,6 +225,16 @@ void updatePotentiometer() {
 // 3. 조향 모터 폐루프(Closed-Loop) 비례 제어 (가변저항 피드백)
 // ==============================================================================
 void controlSteerClosedLoop() {
+  // [REVIEW #5] 스톨 fault 상태: 조향 모터 OFF 유지, 쿨다운 후 재시도 (구동 모터는 controlDriveMotors에서 정지)
+  if (steer_stall_fault) {
+    if (millis() - steer_stall_time < STEER_STALL_COOLDOWN_MS) {
+      analogWrite(STEER_PWM_PIN, 0);
+      return;
+    }
+    steer_stall_fault = false;
+    steer_motor_start_time = 0;
+  }
+
   // [기어 보호 1] 차량 정지 시(PWM == 0) 조향 모터 완전 OFF
   // - 정지 마찰력으로 인한 기어 파손/발열 방지
   // - 사람이 손으로 핸들을 자유롭게 돌려 대시보드 화면을 보며 영점(Center) 튜닝 가능!
@@ -205,14 +244,18 @@ void controlSteerClosedLoop() {
     return;
   }
 
-  // [기어 보호 2] 기구적 하드웨어 한계 초과 시 즉시 보호 차단
-  if (filtered_pot_adc <= POT_MIN_LIMIT || filtered_pot_adc >= POT_MAX_LIMIT) {
+  float error = target_steer_angle - current_steer_angle;
+
+  // [기어 보호 2] 기구적 하드웨어 한계 보호
+  // [REVIEW #4] 한계 방향으로 '더' 돌리려는 경우에만 차단 (중앙 복귀는 허용)
+  // error > 0 이면 각도를 키우는 방향. REVERSE_POT_SENSOR면 각도와 ADC 방향이 반대.
+  bool wants_adc_up = (error > 0) != REVERSE_POT_SENSOR;
+  if ((filtered_pot_adc >= POT_MAX_LIMIT && wants_adc_up) ||
+      (filtered_pot_adc <= POT_MIN_LIMIT && !wants_adc_up)) {
     analogWrite(STEER_PWM_PIN, 0);
     steer_motor_start_time = 0;
     return;
   }
-
-  float error = target_steer_angle - current_steer_angle;
 
   // [기어 보호 3] 불감대(Deadband) 내에 도달하면 조향 모터 정지
   if (abs(error) <= STEER_DEADBAND_DEG) {
@@ -226,7 +269,11 @@ void controlSteerClosedLoop() {
     steer_motor_start_time = millis();
   } else if (millis() - steer_motor_start_time > STEER_STALL_TIMEOUT_MS) {
     // 1.5초 이상 목표 도달 실패 시 기어 파손 방지 차단
+    // [REVIEW #5] fault로 기록 -> 구동 모터 정지 + 텔레메트리 보고 + 쿨다운 후 재시도
     analogWrite(STEER_PWM_PIN, 0);
+    steer_stall_fault = true;
+    steer_stall_time = millis();
+    steer_motor_start_time = 0;
     return;
   }
 
@@ -248,15 +295,33 @@ void controlSteerClosedLoop() {
 // 4. 좌/우 주행 모터 구동
 // ==============================================================================
 void controlDriveMotors() {
+  // [REVIEW #5] 조향 스톨 중에는 구동도 정지 (조향 없이 달리는 상황 방지)
+  if (steer_stall_fault) {
+    analogWrite(LEFT_PWM_PIN, 0);
+    analogWrite(RIGHT_PWM_PIN, 0);
+    last_drive_dir = 0;
+    return;
+  }
+
   int pwm_out = abs(target_drive_pwm);
   pwm_out = constrain(pwm_out, 0, 255);
+  int dir = (target_drive_pwm > 0) ? 1 : ((target_drive_pwm < 0) ? -1 : 0);
 
-  if (target_drive_pwm > 0) {
+  // [REVIEW #24] 전진<->후진 전환 시 PWM 0으로 잠시 멈춘 뒤 DIR 변경 (드라이버 보호)
+  if (dir != 0 && last_drive_dir != 0 && dir != last_drive_dir) {
+    analogWrite(LEFT_PWM_PIN, 0);
+    analogWrite(RIGHT_PWM_PIN, 0);
+    if (drive_reverse_start == 0) drive_reverse_start = millis();
+    if (millis() - drive_reverse_start < DRIVE_REVERSE_DEADTIME_MS) return;
+  }
+  drive_reverse_start = 0;
+
+  if (dir > 0) {
     digitalWrite(LEFT_DIR_PIN, HIGH);
     digitalWrite(RIGHT_DIR_PIN, HIGH);
     analogWrite(LEFT_PWM_PIN, pwm_out);
     analogWrite(RIGHT_PWM_PIN, pwm_out);
-  } else if (target_drive_pwm < 0) {
+  } else if (dir < 0) {
     digitalWrite(LEFT_DIR_PIN, LOW);
     digitalWrite(RIGHT_DIR_PIN, LOW);
     analogWrite(LEFT_PWM_PIN, pwm_out);
@@ -265,6 +330,8 @@ void controlDriveMotors() {
     analogWrite(LEFT_PWM_PIN, 0);
     analogWrite(RIGHT_PWM_PIN, 0);
   }
+  // 정지(0)를 거친 방향 전환도 데드타임을 거치도록 마지막 구동 방향은 유지
+  if (dir != 0) last_drive_dir = dir;
 }
 
 // ==============================================================================
@@ -292,5 +359,9 @@ void sendTelemetryToJetson() {
   Serial.print(target_drive_pwm);
   Serial.print(F(",\"armed\":"));
   Serial.print(is_armed ? 1 : 0);
+  // [REVIEW #5] 조향 스톨 발생 시 fault 필드 보고 (main_fusion이 SENSOR_FAULT로 정지)
+  if (steer_stall_fault) {
+    Serial.print(F(",\"fault\":\"STEER_STALL\""));
+  }
   Serial.println(F("}"));
 }

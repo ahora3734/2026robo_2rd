@@ -70,26 +70,48 @@ void loop() {
 }
 
 // ==========================================
-// 1. 시리얼 통신 안전 파싱
+// 1. 시리얼 통신 안전 파싱 (C-스타일 고정 버퍼로 힙 단편화 방지)
 // ==========================================
+static char rx_buf[64];
+static uint8_t rx_idx = 0;
+
 void parseSerialDataSafe() {
-  if (Serial.available() > 0) {
-    String data = Serial.readStringUntil('\n');
-    data.trim(); 
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (rx_idx == 0) continue;
+      rx_buf[rx_idx] = '\0';
 
-    if (data.startsWith("w,") || data.startsWith("s,")) {
-      int firstComma = data.indexOf(',');
-      int secondComma = data.indexOf(',', firstComma + 1);
+      int pwm_in = 0;
+      float steer_in = 0.0f;
+      bool valid = false;
 
-      if (firstComma > 0 && secondComma > firstComma) {
-        String pwm_str = data.substring(firstComma + 1, secondComma);
-        String steer_str = data.substring(secondComma + 1);
+      // 포맷 A: esp32_bridge.py 표준 규격 <PWM,STEER> (예: <120,-15.20>)
+      if (rx_buf[0] == '<') {
+        if (sscanf(rx_buf, "<%d,%f>", &pwm_in, &steer_in) == 2) {
+          valid = true;
+        }
+      }
+      // 포맷 B: 수동/키보드 명령 호환 w,PWM,STEER / s,PWM,STEER
+      else if (rx_buf[0] == 'w' || rx_buf[0] == 's') {
+        if (sscanf(rx_buf + 2, "%d,%f", &pwm_in, &steer_in) == 2) {
+          valid = true;
+        }
+      }
 
-        target_drive_pwm = pwm_str.toInt();
-        target_steer_angle = steer_str.toFloat();
-        
+      if (valid) {
+        target_drive_pwm = pwm_in;
+        target_steer_angle = steer_in;
         last_comm_time = millis();
-        is_armed = true; 
+        is_armed = true;
+      }
+
+      rx_idx = 0;
+    } else {
+      if (rx_idx < sizeof(rx_buf) - 1) {
+        rx_buf[rx_idx++] = c;
+      } else {
+        rx_idx = 0;
       }
     }
   }

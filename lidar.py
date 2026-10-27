@@ -30,6 +30,16 @@ class LidarNode(Node):
         self.center_half = float(self.get_parameter("center_half_angle_deg").value)
         self.publish_filtered = bool(self.get_parameter("publish_filtered_scan").value)
 
+        # [REVIEW #14] 전방 판정을 부채꼴 대신 차폭 직사각형 통로로 수행
+        self.declare_parameter("vehicle_width_m", 0.9)
+        self.declare_parameter("corridor_margin_m", 0.2)
+        self.declare_parameter("corridor_length_m", 6.0)
+        self.declare_parameter("front_min_rank", 3)   # n번째로 가까운 값 사용 (단일 노이즈 점 무시)
+        self.corridor_half = (float(self.get_parameter("vehicle_width_m").value) / 2.0
+                              + float(self.get_parameter("corridor_margin_m").value))
+        self.corridor_len = float(self.get_parameter("corridor_length_m").value)
+        self.front_rank = max(1, int(self.get_parameter("front_min_rank").value))
+
         self.sub_scan = self.create_subscription(LaserScan, "/scan", self.scan_callback, qos_profile_sensor_data)
         self.pub_obstacle = self.create_publisher(String, "/obstacle_info", 10)
 
@@ -49,6 +59,13 @@ class LidarNode(Node):
         lo = int(len(valid) * 0.10)
         hi = max(lo + 1, int(len(valid) * 0.35))
         return float(statistics.median(valid[lo:hi]))
+
+    def near_min_distance(self, values):
+        """[REVIEW #14] 가는 물체(다리, 기둥)를 지우지 않도록 최소값 계열 사용"""
+        if not values:
+            return self.max_valid
+        valid = sorted(values)
+        return float(valid[min(self.front_rank, len(valid)) - 1])
 
     def make_filtered_scan(self, msg):
         out = LaserScan()
@@ -74,6 +91,7 @@ class LidarNode(Node):
 
     def scan_callback(self, msg: LaserScan):
         left, center, right = [], [], []
+        corridor = []
         angle = msg.angle_min
         inc = msg.angle_increment if msg.angle_increment > 0 else 0.005
 
@@ -89,9 +107,16 @@ class LidarNode(Node):
                         left.append(raw)
                     else:
                         right.append(raw)
+
+                    # 차량 기준 x(전방), y(좌측) 좌표로 통로 내부 점만 수집
+                    x = raw * math.cos(angle)
+                    y = raw * math.sin(angle)
+                    if 0.0 < x <= self.corridor_len and abs(y) <= self.corridor_half:
+                        corridor.append(x)
             angle += inc
 
-        front = self.robust_distance(center)
+        # 전방 거리 = 차폭 통로 안의 가장 가까운 장애물까지의 전방 거리
+        front = self.near_min_distance(corridor) if corridor else self.max_valid
         left_d = self.robust_distance(left)
         right_d = self.robust_distance(right)
 
