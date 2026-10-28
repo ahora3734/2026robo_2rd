@@ -53,11 +53,16 @@ class ESP32Bridge(Node):
             data = json.loads(msg.data)
             pwm = int(round(float(data.get('pwm', 0))))
             steer = float(data.get('steer', 0.0))
+            steer_hold = bool(data.get('steer_hold', False))
 
             pwm = max(-255, min(255, pwm))
             steer = max(-100.0, min(100.0, steer))
 
-            command_str = f"<{pwm},{steer:.2f}>\n"
+            # 정지 조향 요청 시에만 세 번째 필드(HOLD=1) 추가 (펌웨어는 두 형식 모두 지원)
+            if steer_hold:
+                command_str = f"<{pwm},{steer:.2f},1>\n"
+            else:
+                command_str = f"<{pwm},{steer:.2f}>\n"
             self.ser.write(command_str.encode('utf-8'))
         except json.JSONDecodeError:
             self.get_logger().error(f"JSON 파싱 에러: {msg.data[:80]}")
@@ -74,7 +79,10 @@ class ESP32Bridge(Node):
     def read_serial(self):
         if self.ser and self.ser.is_open:
             try:
-                if self.ser.in_waiting > 0:
+                # 쌓인 줄을 모두 읽어 텔레메트리 지연 누적 방지 (steer_cur는 정지 조향 완료 판정에 쓰임)
+                for _ in range(20):
+                    if self.ser.in_waiting <= 0:
+                        break
                     line = self.ser.readline().decode('utf-8', errors='ignore').strip()
                     if line:
                         msg = String()

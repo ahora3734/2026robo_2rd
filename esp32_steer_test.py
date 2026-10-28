@@ -8,6 +8,10 @@
 #     python3 esp32_steer_test.py steer 20          # 오른쪽 20도
 #     python3 esp32_steer_test.py steer -20         # 왼쪽 20도
 #     python3 esp32_steer_test.py steer 20 --pwm 40 --sec 4
+#   정지 조향 시험 (구동 모터 정지 상태에서 핸들만 꺾기, 회피 STEER_PREP과 동일):
+#     python3 esp32_steer_test.py steer 35 --pwm 0 --hold
+#   후진 방향 확인 (바퀴가 뒤로 도는지):
+#     python3 esp32_steer_test.py steer 0 --pwm -30 --sec 2
 import argparse
 import json
 import sys
@@ -19,6 +23,7 @@ ap.add_argument("mode", choices=["pot", "steer"])
 ap.add_argument("angle", nargs="?", type=float, default=20.0)
 ap.add_argument("--pwm", type=int, default=30, help="구동 PWM (0이면 펌웨어가 조향 모터를 끔)")
 ap.add_argument("--sec", type=float, default=4.0, help="조향 시험 시간")
+ap.add_argument("--hold", action="store_true", help="정지 조향 허용 (PWM 0에서도 조향 모터 구동)")
 ap.add_argument("--port", default="/dev/esp32")
 args = ap.parse_args()
 
@@ -187,9 +192,10 @@ try:
     else:
         target = args.angle
         print(f"목표 {target:+.1f}° ({'오른쪽' if target > 0 else '왼쪽'}), 구동 PWM {args.pwm}, {args.sec}초")
-        if args.pwm == 0:
-            print("  주의: PWM 0이면 펌웨어가 조향 모터를 끕니다 (--pwm 을 1 이상으로)")
-        cmd = f"<{args.pwm},{target:.2f}>\n".encode()
+        if args.pwm == 0 and not args.hold:
+            print("  주의: PWM 0이면 펌웨어가 조향 모터를 끕니다 (--hold 를 붙이거나 --pwm 을 1 이상으로)")
+        hold_field = ",1" if args.hold else ""
+        cmd = f"<{args.pwm},{target:.2f}{hold_field}>\n".encode()
         t0 = time.monotonic()
         start_pot = None
         reached = None

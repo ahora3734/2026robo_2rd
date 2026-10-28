@@ -23,7 +23,8 @@ class MainFusionNode(Node):
         self.declare_parameter("corner_pwm", 110)
         self.declare_parameter("near_object_pwm", 80)
         self.declare_parameter("slow_obstacle_pwm", 60)
-        self.declare_parameter("slow_obstacle_dist", 2.2)
+        # 장애물 거리는 모두 '앞 범퍼' 기준 (lidar.py가 범퍼 기준으로 발행)
+        self.declare_parameter("slow_obstacle_dist", 3.5)       # 이 거리부터 저속 접근
         self.declare_parameter("stop_obstacle_dist", 0.8)
         self.declare_parameter("emergency_obstacle_dist", 0.5)
         self.declare_parameter("lookahead_min_m", 2.0)
@@ -48,7 +49,8 @@ class MainFusionNode(Node):
         # --- [REVIEW 반영] 신규 파라미터 ---
         # 경로 추종: Pure Pursuit (False면 heading + CTE 방식, 부호 수정본 사용)
         self.declare_parameter("use_pure_pursuit", True)
-        self.declare_parameter("wheelbase_m", 1.0)            # 고카트 휠베이스 (실측 후 수정)
+        self.declare_parameter("wheelbase_m", 0.96)           # 고카트 휠베이스 (실측 960mm)
+        self.declare_parameter("gps_to_rear_axle_m", 0.45)    # GPS 안테나가 뒷바퀴 축보다 앞에 있는 거리 (실측 450mm, 뒤에 있으면 음수)
         self.declare_parameter("progress_search_window", 8)   # 진행 세그먼트 검색 범위
         self.declare_parameter("corner_steer_deg", 20.0)      # 이 조향각 이상이면 코너 감속
         # 가감속: 가속은 천천히, 감속은 빠르게, 정지는 즉시
@@ -61,9 +63,19 @@ class MainFusionNode(Node):
         self.declare_parameter("require_align", True)         # 출발 시 직진 정렬 단계 사용
         self.declare_parameter("align_distance_m", 4.0)
         self.declare_parameter("align_pwm", 90)
-        # 회피 측면 확인
-        self.declare_parameter("avoid_side_clearance_m", 1.0) # 회피 시작에 필요한 측면 여유
-        self.declare_parameter("avoid_side_abort_m", 0.5)     # 회피 중 이보다 가까우면 정지
+        # 고정 장애물 회피: 판단 정지 -> 대기 -> (필요 시 후진) -> 정지 조향 -> 회피 -> 경로 복귀
+        self.declare_parameter("obstacle_decision_dist", 2.0)   # 이 거리에서 정지 후 판단
+        self.declare_parameter("obstacle_wait_sec", 2.5)        # 이 시간 동안 그대로면 고정 장애물로 판단
+        self.declare_parameter("avoid_arc_required_m", 1.2)     # 최대 조향 궤적으로 최소 이만큼 갈 수 있어야 회피
+        self.declare_parameter("avoid_arc_abort_m", 0.3)        # 회피 중 궤적 여유가 이보다 작으면 정지
+        self.declare_parameter("steer_prep_tolerance_deg", 3.0) # 정지 조향 완료 판정 오차
+        self.declare_parameter("steer_prep_timeout_sec", 3.0)   # 이 시간 안에 못 꺾으면 출발하지 않음
+        # 후진 (후방 센서 없음: 조향 0으로 방금 지나온 길을 따라 짧게만 후진)
+        self.declare_parameter("allow_reverse", True)
+        self.declare_parameter("reverse_pwm", 40)
+        self.declare_parameter("reverse_target_front_m", 1.8)   # 앞 범퍼~장애물 거리가 이만큼 될 때까지
+        self.declare_parameter("reverse_max_sec", 3.0)
+        self.declare_parameter("reverse_max_count", 2)          # 경로 복귀 전까지 최대 후진 횟수
         # ESP32 텔레메트리 감시 (조향 스톨/추종 실패)
         self.declare_parameter("require_esp32_telemetry", True)
         self.declare_parameter("esp32_timeout_sec", 1.0)
@@ -102,6 +114,7 @@ class MainFusionNode(Node):
 
         self.use_pure_pursuit = bool(self.get_parameter("use_pure_pursuit").value)
         self.wheelbase = float(self.get_parameter("wheelbase_m").value)
+        self.gps_to_rear_axle = float(self.get_parameter("gps_to_rear_axle_m").value)
         self.progress_window = max(2, int(self.get_parameter("progress_search_window").value))
         self.corner_steer = float(self.get_parameter("corner_steer_deg").value)
         self.accel_step = float(self.get_parameter("accel_step").value)
@@ -112,8 +125,17 @@ class MainFusionNode(Node):
         self.require_align = bool(self.get_parameter("require_align").value)
         self.align_distance = float(self.get_parameter("align_distance_m").value)
         self.align_pwm = self.clamp_pwm(self.get_parameter("align_pwm").value)
-        self.avoid_side_clearance = float(self.get_parameter("avoid_side_clearance_m").value)
-        self.avoid_side_abort = float(self.get_parameter("avoid_side_abort_m").value)
+        self.obstacle_decision_dist = float(self.get_parameter("obstacle_decision_dist").value)
+        self.obstacle_wait = float(self.get_parameter("obstacle_wait_sec").value)
+        self.avoid_arc_required = float(self.get_parameter("avoid_arc_required_m").value)
+        self.avoid_arc_abort = float(self.get_parameter("avoid_arc_abort_m").value)
+        self.steer_prep_tol = float(self.get_parameter("steer_prep_tolerance_deg").value)
+        self.steer_prep_timeout = float(self.get_parameter("steer_prep_timeout_sec").value)
+        self.allow_reverse = bool(self.get_parameter("allow_reverse").value)
+        self.reverse_pwm = self.clamp_pwm(self.get_parameter("reverse_pwm").value)
+        self.reverse_target_front = float(self.get_parameter("reverse_target_front_m").value)
+        self.reverse_max = float(self.get_parameter("reverse_max_sec").value)
+        self.reverse_max_count = int(self.get_parameter("reverse_max_count").value)
         self.require_esp32 = bool(self.get_parameter("require_esp32_telemetry").value)
         self.esp32_timeout = float(self.get_parameter("esp32_timeout_sec").value)
         self.steer_track_err = float(self.get_parameter("steer_track_error_deg").value)
@@ -171,12 +193,21 @@ class MainFusionNode(Node):
         self.lidar_front = 10.0
         self.lidar_left = 10.0
         self.lidar_right = 10.0
+        self.lidar_arc_left = 0.0
+        self.lidar_arc_right = 0.0
         self.lidar_status = "clear"
 
         self.vision_status = "CLEAR"
         self.state = "WAITING_FOR_NAV"
         self.avoid_direction = 0
         self.avoid_start = 0.0
+        self.wait_start = 0.0
+        self.steer_prep_start = 0.0
+        self.reverse_start = 0.0
+        self.reverse_count = 0
+
+        self.esp32_steer_cur = 0.0
+        self.esp32_steer_time = 0.0
 
         self.steer_err_since = None
         self.steer_fault_until = 0.0
@@ -217,6 +248,17 @@ class MainFusionNode(Node):
         x = math.sin(dl) * math.cos(r2)
         y = (math.cos(r1) * math.sin(r2) - math.sin(r1) * math.cos(r2) * math.cos(dl))
         return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+    def vehicle_point(self):
+        """Pure Pursuit 기준점(뒷바퀴 축 중심). 방위 정렬 전에는 GPS 안테나 위치를 그대로 사용"""
+        p = GeoPoint(self.cur_lat, self.cur_lon)
+        if not self.heading_aligned or self.gps_to_rear_axle == 0.0:
+            return p
+        h = math.radians(self.navigation_heading)
+        back = -self.gps_to_rear_axle
+        lat = p.lat + (back * math.cos(h)) / 111320.0
+        lon = p.lon + (back * math.sin(h)) / (111320.0 * math.cos(math.radians(p.lat)))
+        return GeoPoint(lat, lon)
 
     @staticmethod
     def local_xy(ref: GeoPoint, p: GeoPoint):
@@ -322,6 +364,9 @@ class MainFusionNode(Node):
             self.lidar_front = num("front", 10.0)
             self.lidar_left = num("left", 10.0)
             self.lidar_right = num("right", 10.0)
+            # 최대 조향 궤적으로 부딪히기 전까지 갈 수 있는 거리 (없으면 0 = 회피 불가로 간주)
+            self.lidar_arc_left = num("arc_left", 0.0)
+            self.lidar_arc_right = num("arc_right", 0.0)
         except Exception:
             self.lidar_status = "invalid"
 
@@ -450,6 +495,7 @@ class MainFusionNode(Node):
             self.progress_t = 0.0
             self.progress_initialized = False
             self.avoid_direction = 0
+            self.reverse_count = 0
             if not self.path:
                 self.state = "WAITING_FOR_NAV"
             elif self.state in ("WAITING_FOR_NAV", "ARRIVED"):
@@ -479,6 +525,9 @@ class MainFusionNode(Node):
             armed = int(obj.get("armed", 0))
         except Exception:
             return
+        # 정지 조향(STEER_PREP) 완료 판정용 실제 조향각
+        self.esp32_steer_cur = cur
+        self.esp32_steer_time = now
         fault = str(obj.get("fault", "") or "")
         if fault:
             self.steer_fault_until = now + self.steer_fault_hold
@@ -517,27 +566,41 @@ class MainFusionNode(Node):
         if now < self.steer_fault_until: faults.append(f"STEER({self.steer_fault_text})")
         return faults
 
-    def side_is_clear(self, direction, threshold):
-        """direction: +1 오른쪽, -1 왼쪽"""
-        if direction > 0:
-            return self.lidar_right >= threshold and "curb_right" not in self.lidar_status
-        return self.lidar_left >= threshold and "curb_left" not in self.lidar_status
+    def arc_free(self, direction):
+        """direction: +1 오른쪽, -1 왼쪽. 최대 조향으로 부딪히기 전까지 갈 수 있는 거리 (lidar.py 계산)"""
+        return self.lidar_arc_right if direction > 0 else self.lidar_arc_left
 
     def choose_avoid_direction(self):
-        """[REVIEW #15] 측면 여유가 있는 쪽으로만 회피, 양쪽 모두 막혔으면 0"""
-        right_ok = self.side_is_clear(1, self.avoid_side_clearance)
-        left_ok = self.side_is_clear(-1, self.avoid_side_clearance)
-        if right_ok and (not left_ok or self.lidar_right >= self.lidar_left):
+        """회전 궤적에 여유가 있는 쪽으로만 회피, 양쪽 모두 막혔으면 0"""
+        right, left = self.arc_free(1), self.arc_free(-1)
+        right_ok = right >= self.avoid_arc_required
+        left_ok = left >= self.avoid_arc_required
+        if right_ok and left_ok and abs(right - left) < 0.2:
+            # 양쪽 여유가 비슷하면 경로가 있는 쪽으로 (cte 부호 +1 = 차가 경로 왼쪽 -> 오른쪽으로)
+            return 1 if self.last_cte_sign >= 0 else -1
+        if right_ok and (not left_ok or right >= left):
             return 1
         if left_ok:
             return -1
         return 0
 
+    def obstacle_speed_cap(self, target_pwm):
+        """장애물에 가까워지면 저속 접근"""
+        if self.lidar_front <= self.slow_obstacle_dist:
+            return min(target_pwm, self.slow_obstacle_pwm)
+        return target_pwm
+
+    def enter_obstacle_wait(self, now, settle_only=False):
+        """정지 후 대기. settle_only면 차가 멈출 시간(0.5초)만 기다리고 바로 다시 판단"""
+        self.state = "OBSTACLE_WAIT"
+        self.wait_start = now - max(0.0, self.obstacle_wait - 0.5) if settle_only else now
+        self.avoid_direction = 0
+
     def path_steer(self, p=None):
         if not self.path or self.cur_lat is None:
             return 0.0
         if p is None:
-            p = GeoPoint(self.cur_lat, self.cur_lon)
+            p = self.vehicle_point()
         target = self.lookahead_target(p)
         if target is None:
             return 0.0
@@ -571,52 +634,116 @@ class MainFusionNode(Node):
         self.current_pwm = 0.0
         return 0
 
-    def obstacle_override(self, now):
-        if self.lidar_front <= self.emergency_obstacle_dist:
-            self.state = "E_STOP"
-            return 0, 0.0, "E-STOP"
-        if self.vision_status == "PERSON_FRONT":
-            self.state = "STOP"
-            return 0, 0.0, "보행자 정지"
-        if self.lidar_front <= self.stop_obstacle_dist:
-            self.state = "STOP"
-            return 0, 0.0, "근접 장애물 정지"
-        if self.state in ("STOP", "E_STOP"):
-            if self.lidar_front > self.stop_obstacle_dist + 0.25 and self.vision_status != "PERSON_FRONT":
-                self.state = "NAVIGATE"
-            else:
-                return 0, 0.0, "정지 유지"
-        if self.lidar_front <= self.slow_obstacle_dist and self.state in ("NAVIGATE", "ALIGN"):
-            direction = self.avoid_direction or self.choose_avoid_direction()
-            if direction == 0:
-                return 0, 0.0, "회피 공간 없음 - 정지"
+    def obstacle_wait_step(self, now, person):
+        """정지 대기: 사라지면 재출발, 그대로면 고정 장애물 -> 회피 방향 조향 또는 후진"""
+        front = self.lidar_front
+        if person:
+            # 사람은 회피하지 않고 비킬 때까지 대기
+            self.wait_start = now
+            return 0, 0.0, "보행자 대기"
+        if front > self.obstacle_decision_dist + 0.3:
+            # 장애물이 사라짐 (움직이는 물체였음) -> 주행 재개
+            self.reverse_count = 0
+            self.state = "NAVIGATE"
+            return None
+        elapsed = now - self.wait_start
+        if elapsed < self.obstacle_wait:
+            return 0, 0.0, f"장애물 대기 ({self.obstacle_wait - elapsed:.1f}s)"
+
+        # 대기 후에도 그대로 -> 고정 장애물
+        direction = self.choose_avoid_direction()
+        if direction != 0:
             self.avoid_direction = direction
-            self.avoid_start = now
+            self.state = "STEER_PREP"
+            self.steer_prep_start = now
+            return 0, direction * self.avoid_steer, "회피 방향 조향 준비"
+        if (self.allow_reverse and self.reverse_count < self.reverse_max_count
+                and front < self.reverse_target_front):
+            self.state = "REVERSE"
+            self.reverse_start = now
+            self.reverse_count += 1
+            return self.reverse_pwm, 0.0, "후진하여 회피 공간 확보"
+        return 0, 0.0, "회피 경로 없음 - 대기"
+
+    def steer_prep_step(self, now, person):
+        """정지 상태에서 핸들을 회피 방향 최대로 꺾고, 실제 조향각(steer_cur)이 도달하면 출발"""
+        target = self.avoid_direction * self.avoid_steer
+        if person:
+            self.enter_obstacle_wait(now)
+            return 0, 0.0, "보행자 감지 - 조향 준비 중단"
+        fresh = (now - self.esp32_steer_time) <= 0.3
+        if fresh and abs(self.esp32_steer_cur - target) <= self.steer_prep_tol:
             self.state = "AVOID_RIGHT" if self.avoid_direction > 0 else "AVOID_LEFT"
+            self.avoid_start = now
+            return self.slow_obstacle_pwm, target, "장애물 회피 출발"
+        if now - self.steer_prep_start > self.steer_prep_timeout:
+            self.enter_obstacle_wait(now)
+            return 0, 0.0, "조향 준비 실패 - 재시도 대기"
+        return 0, target, "정지 상태에서 회피 방향 조향"
+
+    def reverse_step(self, now):
+        """조향 0으로 저속 직진 후진. 앞 장애물과의 거리가 확보되거나 시간 초과 시 정지 후 재판단"""
+        if self.lidar_front >= self.reverse_target_front or now - self.reverse_start >= self.reverse_max:
+            self.enter_obstacle_wait(now, settle_only=True)
+            return 0, 0.0, "후진 완료 - 회피 방향 판단"
+        return self.reverse_pwm, 0.0, f"후진 중 ({self.reverse_count}/{self.reverse_max_count})"
+
+    def obstacle_override(self, now):
+        front = self.lidar_front
+        person = self.vision_status == "PERSON_FRONT"
+
+        if self.state == "REVERSE":
+            return self.reverse_step(now)
+        if self.state == "STEER_PREP":
+            return self.steer_prep_step(now, person)
+        if self.state == "OBSTACLE_WAIT":
+            return self.obstacle_wait_step(now, person)
+
+        # 주행 중: 근접 장애물/보행자 -> 즉시 정지 후 대기
+        if front <= self.emergency_obstacle_dist:
+            self.enter_obstacle_wait(now)
+            return 0, 0.0, "E-STOP (초근접 장애물)"
+        if person:
+            self.enter_obstacle_wait(now)
+            return 0, 0.0, "보행자 정지"
+        if front <= self.stop_obstacle_dist:
+            self.enter_obstacle_wait(now)
+            return 0, 0.0, "근접 장애물 정지"
+        # 정상 주행/경로 복귀 중 판단 거리 진입 -> 정지 후 고정 장애물인지 확인 (경로 복귀 중 재회피 포함)
+        if front <= self.obstacle_decision_dist and self.state not in AVOID_STATES:
+            self.enter_obstacle_wait(now)
+            return 0, 0.0, "장애물 감지 - 정지 후 판단"
+
         if self.state in AVOID_STATES:
             direction = 1 if self.state == "AVOID_RIGHT" else -1
-            if not self.side_is_clear(direction, self.avoid_side_abort):
-                return 0, 0.0, "회피 측면 근접 - 정지"
-            elapsed = now - self.avoid_start
-            steer = self.avoid_steer if self.state == "AVOID_RIGHT" else -self.avoid_steer
-            if elapsed >= self.avoid_min_duration and self.lidar_front > self.slow_obstacle_dist + 0.4:
+            if self.arc_free(direction) < self.avoid_arc_abort:
+                self.enter_obstacle_wait(now, settle_only=True)
+                return 0, 0.0, "회피 경로 근접 - 정지"
+            if now - self.avoid_start >= self.avoid_min_duration and front > self.obstacle_decision_dist + 0.3:
                 self.state = "REJOIN_PATH"
-            return self.slow_obstacle_pwm, steer, "장애물 회피"
+            return self.slow_obstacle_pwm, direction * self.avoid_steer, "장애물 회피"
         if self.state == "REJOIN_PATH":
             cte = self.last_cte if self.last_cte is not None else float("inf")
-            if cte <= self.rejoin_distance and self.lidar_front > self.slow_obstacle_dist + 0.4:
+            if cte <= self.rejoin_distance:
                 self.avoid_direction = 0
+                self.reverse_count = 0
                 self.state = "NAVIGATE"
             return self.corner_pwm, self.path_steer(), "경로 복귀"
         return None
 
-    def publish_state(self, speed_pwm, steer, mode):
-        self.filtered_steer = (self.steer_alpha * steer + (1.0 - self.steer_alpha) * self.filtered_steer)
-        cmd_pwm = int(max(0, min(255, round(speed_pwm))))
-        
+    def publish_state(self, speed_pwm, steer, mode, steer_hold=False, raw_steer=False):
+        # raw_steer: 필터 없이 목표 조향을 그대로 전송 (정지 조향, 후진)
+        if raw_steer:
+            self.filtered_steer = float(steer)
+        else:
+            self.filtered_steer = (self.steer_alpha * steer + (1.0 - self.steer_alpha) * self.filtered_steer)
+        # 음수 = 후진 (REVERSE 상태에서만 음수가 들어옴)
+        cmd_pwm = int(max(-255, min(255, round(speed_pwm))))
+
         cmd = {
             "pwm": cmd_pwm,
             "steer": round(float(self.filtered_steer), 2),
+            "steer_hold": bool(steer_hold),
             "mode": mode,
             "state": self.state,
         }
@@ -647,6 +774,8 @@ class MainFusionNode(Node):
             "lidar_front": round(self.lidar_front, 2),
             "lidar_left": round(self.lidar_left, 2),
             "lidar_right": round(self.lidar_right, 2),
+            "lidar_arc_left": round(self.lidar_arc_left, 2),
+            "lidar_arc_right": round(self.lidar_arc_right, 2),
             "vision": self.vision_status,
             "remote_estop": self.remote_estop,
         }
@@ -672,7 +801,7 @@ class MainFusionNode(Node):
             self.state = "WAITING_FOR_GPS"
             self.publish_state(self.hard_stop(), 0.0, "GPS 위치 대기")
             return
-        p = GeoPoint(self.cur_lat, self.cur_lon)
+        p = self.vehicle_point()
         self.update_progress(p)
         final = GeoPoint(self.path[-1][0], self.path[-1][1])
         if self.distance(p, final) <= self.arrival_distance:
@@ -683,7 +812,16 @@ class MainFusionNode(Node):
         override = self.obstacle_override(now)
         if override is not None:
             target_pwm, steer, mode = override
-            pwm = self.hard_stop() if target_pwm <= 0 else self.ramp_pwm(target_pwm)
+            if self.state == "REVERSE":
+                # 후진: 램프 없이 저속 고정, 조향은 직진 유지
+                self.current_pwm = 0.0
+                self.publish_state(-abs(target_pwm), 0.0, mode, raw_steer=True)
+                return
+            if self.state == "STEER_PREP":
+                # 정지 조향: 구동 PWM 0 + ESP32에 정지 조향 허용, 목표각은 필터 없이 바로 전송
+                self.publish_state(self.hard_stop(), steer, mode, steer_hold=True, raw_steer=True)
+                return
+            pwm = self.hard_stop() if target_pwm <= 0 else self.ramp_pwm(self.obstacle_speed_cap(target_pwm))
             self.publish_state(pwm, steer, mode)
             return
 
@@ -695,7 +833,7 @@ class MainFusionNode(Node):
         if self.require_align and not self.heading_aligned:
             # [REVIEW #9] 출발 직후 진짜 방위를 모르므로 조향 0으로 직진하며 GPS course 측정
             self.state = "ALIGN"
-            pwm = self.ramp_pwm(min(self.align_pwm, speed_cap))
+            pwm = self.ramp_pwm(self.obstacle_speed_cap(min(self.align_pwm, speed_cap)))
             self.publish_state(pwm, 0.0, "초기 방위 정렬 직진")
             return
 
@@ -711,6 +849,7 @@ class MainFusionNode(Node):
             target_pwm = min(target_pwm, self.corner_pwm)
         if abs(steer) > self.corner_steer:
             target_pwm = min(target_pwm, self.corner_pwm)
+        target_pwm = self.obstacle_speed_cap(target_pwm)
 
         pwm = self.ramp_pwm(target_pwm)
         self.publish_state(pwm, steer, "정상 경로 추종")

@@ -6,6 +6,7 @@
 // - 젯슨(Jetson)으로부터 수신한 목표 조향각과 비교하여 실시간 P/PID 조향 모터 제어
 // - 젯슨으로 현재 가변저항 ADC 및 각도 텔레메트리를 시리얼 JSON으로 실시간 피드백 전송
 // - 통신 두절(0.5초 초과) 시 안전 워치독 작동으로 전 모터 즉각 정지
+// - <PWM,STEER,1> 수신 시 정지 상태(PWM 0)에서도 조향 (장애물 회피 전 핸들 미리 꺾기)
 // ==============================================================================
 
 #include <Arduino.h>
@@ -52,6 +53,8 @@ const int STEER_MAX_PWM = 180;  // 조향 모터 안전 최대 PWM
 bool is_armed = false;
 int target_drive_pwm = 0;
 float target_steer_angle = 0.0;
+// 정지 조향 허용: <PWM,STEER,1> 수신 시 PWM 0에서도 조향 모터 구동 (장애물 회피 전 핸들 미리 꺾기)
+bool steer_hold_requested = false;
 
 float current_steer_angle = 0.0;
 float filtered_pot_adc = 2048.0;
@@ -166,17 +169,19 @@ void parseSerialDataSafe() {
 
       int pwm_in = 0;
       float steer_in = 0.0f;
+      int hold_in = 0;
       bool valid = false;
 
-      // 포맷 A: esp32_bridge.py 표준 규격 <PWM,STEER> (예: <120,-15.20>)
+      // 포맷 A: esp32_bridge.py 표준 규격 <PWM,STEER> 또는 <PWM,STEER,HOLD> (예: <120,-15.20>, <0,35.00,1>)
+      // - 세 번째 필드가 없으면 sscanf가 2를 반환하고 hold_in은 0 유지 (기존 형식 호환)
       if (rx_buf[0] == '<') {
-        if (sscanf(rx_buf, "<%d,%f>", &pwm_in, &steer_in) == 2) {
+        if (sscanf(rx_buf, "<%d,%f,%d>", &pwm_in, &steer_in, &hold_in) >= 2) {
           valid = true;
         }
       }
-      // 포맷 B: 수동/키보드 명령 호환 w,PWM,STEER / s,PWM,STEER
+      // 포맷 B: 수동/키보드 명령 호환 w,PWM,STEER[,HOLD] / s,PWM,STEER[,HOLD]
       else if (rx_buf[0] == 'w' || rx_buf[0] == 's') {
-        if (sscanf(rx_buf + 2, "%d,%f", &pwm_in, &steer_in) == 2) {
+        if (sscanf(rx_buf + 2, "%d,%f,%d", &pwm_in, &steer_in, &hold_in) >= 2) {
           valid = true;
         }
       }
@@ -184,6 +189,7 @@ void parseSerialDataSafe() {
       if (valid) {
         target_drive_pwm = pwm_in;
         target_steer_angle = constrain(steer_in, -MAX_STEER_ANGLE_DEG, MAX_STEER_ANGLE_DEG);
+        steer_hold_requested = (hold_in != 0);
         last_comm_time = millis();
         is_armed = true;
       }
@@ -242,7 +248,8 @@ void controlSteerClosedLoop() {
   // [기어 보호 1] 차량 정지 시(PWM == 0) 조향 모터 완전 OFF
   // - 정지 마찰력으로 인한 기어 파손/발열 방지
   // - 사람이 손으로 핸들을 자유롭게 돌려 대시보드 화면을 보며 영점(Center) 튜닝 가능!
-  if (abs(target_drive_pwm) == 0) {
+  // - 예외: 젯슨이 정지 조향(HOLD=1)을 요청한 경우에만 정지 상태에서 조향 (스톨 감시는 그대로 적용)
+  if (abs(target_drive_pwm) == 0 && !steer_hold_requested) {
     analogWrite(STEER_PWM_PIN, 0);
     steer_motor_start_time = 0;
     return;
@@ -368,6 +375,8 @@ void sendTelemetryToJetson() {
   Serial.print(target_drive_pwm);
   Serial.print(F(",\"armed\":"));
   Serial.print(is_armed ? 1 : 0);
+  Serial.print(F(",\"hold\":"));
+  Serial.print(steer_hold_requested ? 1 : 0);
   // [REVIEW #5] 조향 스톨 발생 시 fault 필드 보고 (main_fusion이 SENSOR_FAULT로 정지)
   if (steer_stall_fault) {
     Serial.print(F(",\"fault\":\"STEER_STALL\""));
