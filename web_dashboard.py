@@ -162,6 +162,16 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
 .steer-metric-item .m-val { font-size:13px; font-weight:bold; color:#fff; }
 .steer-metric-item .m-val.pot { color:#ffea00; text-shadow:0 0 6px rgba(255,234,0,0.5); }
 .steer-metric-item .m-val.target { color:#00aaff; }
+
+/* Keyboard E-Stop (SPACE = 정지, R = 해제) */
+.estop-hint{position:fixed;right:12px;bottom:10px;z-index:3000;background:rgba(0,0,0,.8);border:1px solid #ff003c;color:#ff6b81;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:4px}
+.estop-overlay{display:none;position:fixed;inset:0;z-index:4000;pointer-events:none;border:12px solid #ff003c;background:rgba(255,0,60,0.18);align-items:center;justify-content:center}
+.estop-overlay.on{display:flex}
+.estop-overlay.pending{border-color:#ffea00;background:rgba(255,234,0,0.15)}
+.estop-box{background:rgba(10,0,0,.9);border:3px solid currentColor;color:#ff003c;padding:24px 48px;border-radius:12px;text-align:center}
+.estop-overlay.pending .estop-box{color:#ffea00}
+.estop-title{font-size:64px;font-weight:900;letter-spacing:4px}
+.estop-sub{font-size:22px;color:#fff;margin-top:8px}
 </style>
 </head>
 <body>
@@ -273,6 +283,13 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
     </div>
 </div>
 </div>
+</div>
+<div class="estop-hint">⌨ SPACE 비상정지 | R 해제</div>
+<div class="estop-overlay" id="estop-overlay">
+  <div class="estop-box">
+    <div class="estop-title" id="estop-title">🛑 비상정지</div>
+    <div class="estop-sub" id="estop-sub">R 키를 누르면 자율주행을 재개합니다</div>
+  </div>
 </div>
 <script>
 const map=L.map('map').setView([36.0564, 129.3715], 18);
@@ -470,6 +487,43 @@ function renderRadar() {
 }
 requestAnimationFrame(renderRadar);
 
+// --- 키보드 비상정지: SPACE = 정지, R = 해제 (/api/estop -> /estop -> main_fusion) ---
+// estopRequested: 사용자가 정지를 요청했는지. main_fusion이 재시작되어 정지 상태가 풀리면 update()에서 재전송
+let estopRequested = false;
+let estopActive = false;  // main_fusion이 보고한 실제 정지 상태 (/vehicle_status의 remote_estop)
+
+function sendEstop(cmd) {
+    return fetch('/api/estop', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({cmd: cmd})
+    }).catch(()=>{});
+}
+
+function renderEstop() {
+    const ov = document.getElementById('estop-overlay');
+    const pending = estopRequested && !estopActive;
+    ov.className = 'estop-overlay' + ((estopRequested || estopActive) ? ' on' : '') + (pending ? ' pending' : '');
+    document.getElementById('estop-title').innerText = pending ? '⏳ 정지 명령 전송 중' : '🛑 비상정지';
+    document.getElementById('estop-sub').innerText = pending
+        ? '차량 정지 확인 대기 중... (계속 재전송)'
+        : 'R 키를 누르면 자율주행을 재개합니다';
+}
+
+// capture 단계에서 처리 -> 지도/입력창 등 다른 요소가 키를 가로채지 못함
+// SPACE는 입력창에 포커스가 있어도 항상 정지 (안전 우선)
+window.addEventListener('keydown', e => {
+    if (e.code === 'Space') {
+        e.preventDefault();
+        estopRequested = true;
+        sendEstop('STOP');
+        renderEstop();
+    } else if ((e.key === 'r' || e.key === 'R') && e.target.tagName !== 'INPUT' && !e.repeat) {
+        estopRequested = false;
+        sendEstop('RELEASE');
+        renderEstop();
+    }
+}, true);
+
 function setLedStatus(id, isActive) {
     const led = document.getElementById(id);
     if(isActive) {
@@ -484,6 +538,11 @@ function setLedStatus(id, isActive) {
 function update(){
   fetch('/api/data').then(r=>r.json()).then(d=>{
     const g=d.gps,r=d.route,t=d.telemetry;
+
+    estopActive = !!t.remote_estop;
+    if (estopRequested && !estopActive) sendEstop('STOP');
+    renderEstop();
+
     robot.setLatLng([g.lat,g.lon]);
     if(!interacting)map.panTo([g.lat,g.lon]);
     
@@ -579,6 +638,8 @@ class WebDashboardNode(Node):
 
         # 퍼블리셔 (사용자가 웹에서 선택한 목적지 전달)
         self.pub_dest = self.create_publisher(String, "/set_destination", 10)
+        # 키보드 비상정지 (SPACE/R) -> main_fusion estop_callback
+        self.pub_estop = self.create_publisher(String, "/estop", 10)
 
         # 서브스크라이버
         self.create_subscription(String, "/gps_status", self.gps_status_callback, 10)
@@ -774,6 +835,16 @@ def set_destination_api():
         ros_node.pub_dest.publish(String(data=json.dumps(data, ensure_ascii=False)))
         return jsonify({"status": "ok"})
     return jsonify({"status": "error", "msg": "ROS 노드 미구동"})
+
+@app.route("/api/estop", methods=["POST"])
+def estop_api():
+    cmd = str((request.json or {}).get("cmd", "")).strip().upper()
+    if cmd not in ("STOP", "RELEASE"):
+        return jsonify({"status": "error", "msg": "cmd는 STOP 또는 RELEASE"}), 400
+    if ros_node is not None:
+        ros_node.pub_estop.publish(String(data=cmd))
+        return jsonify({"status": "ok"})
+    return jsonify({"status": "error", "msg": "ROS 노드 미구동"}), 503
 
 @app.route("/api/search_poi", methods=["POST"])
 def search_poi():
