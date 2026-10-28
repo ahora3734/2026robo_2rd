@@ -62,9 +62,13 @@ const unsigned long WATCHDOG_TIMEOUT_MS = 500;
 unsigned long last_telemetry_time = 0;
 const unsigned long TELEMETRY_INTERVAL_MS = 50; // 20Hz 주기로 젯슨에 상태 전송
 
-// 기어 파손 방지: 조향 모터 연속 구동 한계 시간 (스톨 차단)
-const unsigned long STEER_STALL_TIMEOUT_MS = 1500;
-unsigned long steer_motor_start_time = 0;
+// 기어 파손 방지: 스톨 차단 (연속 구동 시간이 아니라 '진행 없음'으로 판정)
+// - 모터를 돌리는데 STEER_STALL_TIMEOUT_MS 동안 pot ADC가 STEER_STALL_MIN_PROGRESS_ADC 이상 변하지 않으면 스톨
+// - 커브에서 목표각이 계속 바뀌어 모터가 오래 돌아도, 핸들이 움직이고 있으면 스톨로 보지 않음
+const unsigned long STEER_STALL_TIMEOUT_MS = 300;
+const float STEER_STALL_MIN_PROGRESS_ADC = 15.0;
+unsigned long steer_motor_start_time = 0;   // 마지막으로 진행이 확인된 시각 (0이면 모터 정지 상태)
+float steer_progress_ref_adc = 0.0;         // 마지막으로 진행이 확인된 시점의 ADC
 
 // [REVIEW #5] 스톨 발생 시: 구동 모터까지 정지 + 텔레메트리 fault 보고 + 일정 시간 후 재시도
 const unsigned long STEER_STALL_COOLDOWN_MS = 1000;
@@ -264,11 +268,16 @@ void controlSteerClosedLoop() {
     return;
   }
 
-  // [기어 보호 4] 스톨(Stall) / 기어 걸림 방지 안전 타이머
+  // [기어 보호 4] 스톨(Stall) / 기어 걸림 방지: 모터를 돌리는데 핸들이 움직이지 않는지 감시
   if (steer_motor_start_time == 0) {
     steer_motor_start_time = millis();
+    steer_progress_ref_adc = filtered_pot_adc;
+  } else if (fabsf(filtered_pot_adc - steer_progress_ref_adc) >= STEER_STALL_MIN_PROGRESS_ADC) {
+    // 핸들이 움직이고 있음 -> 진행 기준점 갱신
+    steer_motor_start_time = millis();
+    steer_progress_ref_adc = filtered_pot_adc;
   } else if (millis() - steer_motor_start_time > STEER_STALL_TIMEOUT_MS) {
-    // 1.5초 이상 목표 도달 실패 시 기어 파손 방지 차단
+    // 0.3초 동안 핸들이 거의 움직이지 않으면 기어 파손 방지 차단
     // [REVIEW #5] fault로 기록 -> 구동 모터 정지 + 텔레메트리 보고 + 쿨다운 후 재시도
     analogWrite(STEER_PWM_PIN, 0);
     steer_stall_fault = true;

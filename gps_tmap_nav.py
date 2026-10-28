@@ -306,6 +306,8 @@ class GpsTmapNavNode(Node):
                                         "lat": lat,
                                         "lon": lon,
                                         "quality": q_map.get(quality, "일반 GPS"),
+                                        # main_fusion의 RTK 판정(4=FIX, 5=Float)용 숫자 품질값
+                                        "fix_quality": int(quality) if quality.isdigit() else None,
                                         "is_real_gps": quality != "0",
                                     })
                                 
@@ -318,6 +320,7 @@ class GpsTmapNavNode(Node):
             except Exception as e:
                 with self.gps_lock:
                     self.gps_data["is_real_gps"] = False
+                    self.gps_data["fix_quality"] = None
                     self.gps_data["quality"] = "GPS 연결 끊김 (수신 대기)"
                 if ser:
                     try: ser.close()
