@@ -3,7 +3,7 @@
 gps_tmap_nav.py
 ============================================================
 GPS 수신 및 T-Map/교내 실측 전역 경로 계획 전용 노드
-- u-blox ZED-F9P RTK GNSS (/dev/gps) NMEA 데이터 파싱
+- u-blox ZED-F9P RTK GNSS (/dev/ublox_gps) NMEA 데이터 파싱
 - /gps_pos 및 /gps_status 토픽 실시간 발행
 - 교내 실측 정밀 경로 및 SK T-Map 보행자 API 기반 경로 생성
 - 웹 관제탑(/set_destination)으로부터 목적지 요청 수신
@@ -79,7 +79,7 @@ KEYWORD_TO_ROUTE = {
     "삼거리": "START_TO_INTERSECTION"
 }
 
-SERIAL_PORT = "/dev/gps"
+SERIAL_PORT = "/dev/ublox_gps"
 BAUDRATE = 115200
 TMAP_APP_KEY = os.getenv("TMAP_APP_KEY", "")
 MOCK_START_LAT = 36.056400
@@ -285,11 +285,13 @@ class GpsTmapNavNode(Node):
             "4": "RTK FIX",
             "5": "RTK Float"
         }
+        warned = False  # 연결 실패 경고는 끊길 때마다 1회만 출력 (1초마다 로그 폭주 방지)
         while self.running and rclpy.ok():
             ser = None
             try:
                 ser = serial.Serial(self.gps_port, self.gps_baudrate, timeout=0.1)
                 ser.reset_input_buffer()
+                warned = False
                 self.get_logger().info(f"✅ GPS 시리얼 연결 성공: {self.gps_port} @ {self.gps_baudrate} bps")
 
                 while self.running and rclpy.ok() and ser.is_open:
@@ -318,6 +320,9 @@ class GpsTmapNavNode(Node):
                                 # 내비게이션 진행률 갱신
                                 self.update_navigation(lat, lon)
             except Exception as e:
+                if not warned:
+                    self.get_logger().warn(f"⚠️ GPS 시리얼 연결 실패 ({self.gps_port}): {e}")
+                    warned = True
                 with self.gps_lock:
                     self.gps_data["is_real_gps"] = False
                     self.gps_data["fix_quality"] = None

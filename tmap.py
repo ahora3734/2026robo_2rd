@@ -89,7 +89,7 @@ route_lock = threading.Lock()
 telemetry_lock = threading.Lock()
 map_lock = threading.Lock()
 
-SERIAL_PORT = "/dev/gps"
+SERIAL_PORT = "/dev/ublox_gps"
 BAUDRATE = 115200
 TMAP_APP_KEY = os.getenv("TMAP_APP_KEY", "")
 MOCK_START_LAT = 36.056400

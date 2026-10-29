@@ -8,6 +8,59 @@ mkdir -p "${LOG_DIR}"
 
 # [REVIEW #3] 종료 요청 여부는 종료 코드가 아니라 플래그 파일로 판단
 STOP_FLAG="${LOG_DIR}/.stop_requested"
+
+# ==========================================================
+# 🔁 이전에 실행 중인 start.sh가 있으면 정상 종료시킨 뒤 새로 실행
+# ==========================================================
+# - 감시 루프(서브셸)도 이름이 'bash ./start.sh'라서, 부모가 start.sh가 아닌 '본체'만 골라 종료
+# - 본체는 마지막에 tail -f를 포그라운드로 기다리고 있어 TERM만 보내면 trap(cleanup)이 실행되지 않음
+#   -> tail도 함께 종료해야 cleanup(노드 정리)이 돈다
+stop_previous_instances() {
+  local pid ppid args pcmd cwd
+  local prev=()
+  for pid in $(pgrep -f "start\.sh" 2>/dev/null || true); do
+    [ "${pid}" = "$$" ] && continue
+    ppid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ')"
+    [ -z "${ppid}" ] && continue
+    [ "${ppid}" = "$$" ] && continue
+    args="$(ps -o args= -p "${pid}" 2>/dev/null || true)"
+    [[ "${args}" == bash*start.sh* ]] || continue
+    pcmd="$(ps -o args= -p "${ppid}" 2>/dev/null || true)"
+    [[ "${pcmd}" == *start.sh* ]] && continue
+    # 이 프로젝트의 start.sh인지 확인 (절대경로 실행 또는 이 폴더에서 ./start.sh 실행)
+    cwd="$(readlink "/proc/${pid}/cwd" 2>/dev/null || true)"
+    [[ "${args}" == *"${SCRIPT_DIR}"* || "${cwd}" == "${SCRIPT_DIR}" ]] || continue
+    prev+=("${pid}")
+  done
+  [ "${#prev[@]}" -eq 0 ] && return 0
+
+  echo "🔁 이전에 실행 중인 start.sh 발견 (PID: ${prev[*]}) -> 종료 후 새로 시작합니다..."
+  for pid in "${prev[@]}"; do
+    kill -TERM "${pid}" 2>/dev/null || true
+    pkill -TERM -P "${pid}" -x tail 2>/dev/null || true
+  done
+
+  # 이전 cleanup은 최대 약 6초 소요 -> 15초까지 대기
+  for _ in $(seq 1 150); do
+    local alive=0
+    for pid in "${prev[@]}"; do
+      kill -0 "${pid}" 2>/dev/null && alive=1
+    done
+    [ "${alive}" -eq 0 ] && break
+    sleep 0.1
+  done
+
+  # 그래도 남아 있으면 본체와 감시 루프를 강제 종료 (노드는 아래 kill_leftovers가 정리)
+  for pid in "${prev[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      echo "⚠️  PID ${pid}가 응답하지 않아 강제 종료합니다."
+      pkill -KILL -P "${pid}" 2>/dev/null || true
+      kill -KILL "${pid}" 2>/dev/null || true
+    fi
+  done
+}
+stop_previous_instances
+
 rm -f "${STOP_FLAG}"
 
 # 옵션 (환경변수로 변경 가능)
