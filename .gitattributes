@@ -1,0 +1,12 @@
+# Windows에서 편집해도 저장소와 젯슨(Linux)에는 항상 LF로 저장
+# - start.sh가 CRLF가 되면 젯슨에서 "/usr/bin/env: 'bash\r'" 오류로 실행 불가
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.ino   text eol=lf
+*.md    text eol=lf
+
+*.png   binary
+*.jpg   binary
