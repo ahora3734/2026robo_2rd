@@ -185,6 +185,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     "fusion_state": "NAVIGATE",
                     "status_msg": "정상 경로 추종 (가변저항 피드백 정렬 완료)",
                     "imu_heading": round(heading, 1),
+                    "imu_raw_heading": round((heading - 40.0) % 360.0, 1),
                     "imu_gz": round(steer * 0.5, 2),
                     "imu_active": True,
                     "gps_course": round(heading, 1),

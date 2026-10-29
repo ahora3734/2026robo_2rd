@@ -32,7 +32,7 @@ class ImuNode(Node):
 
         # [REVIEW #10] 나침반 규약(시계방향 +)으로 맞추기 위한 yaw 반전 옵션
         # 차를 손으로 오른쪽(시계방향)으로 돌렸을 때 /imu_heading이 '감소'하면 True로 설정
-        self.declare_parameter("invert_yaw", False)
+        self.declare_parameter("invert_yaw", True)
         self.invert_yaw = bool(self.get_parameter("invert_yaw").value)
 
         # ROS 2 토픽 퍼블리셔

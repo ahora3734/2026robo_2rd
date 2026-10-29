@@ -71,6 +71,7 @@ telemetry_data = {
     "steer": 0.0,
     "fusion_state": "WAITING_FOR_NAV",
     "imu_heading": 0.0,
+    "imu_raw_heading": None,
     "imu_gz": 0.0,
     "imu_active": False,
     "gps_course": None,
@@ -131,6 +132,7 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
 .data-card:hover { border-color:#00ffff; background:rgba(0,255,255,0.05); }
 .data-label { font-size:10px; color:#888; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; text-align:center; }
 .data-value { font-size:18px; font-weight:bold; color:#fff; text-shadow:0 0 8px rgba(255,255,255,0.4); text-align:center; }
+.data-sub { font-size:10px; color:#888; text-align:center; margin-top:2px; }
 
 .nav-card{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:rgba(15,15,20,0.9);border:1px solid #00ffff;color:#eee;width:90%;max-width:390px;padding:10px;border-radius:8px;text-align:center;box-shadow:0 0 15px rgba(0,255,255,0.2)}
 .nav-title{font-weight:bold;font-size:13px;color:#fff}
@@ -266,6 +268,7 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
             <div class="data-card">
                 <div class="data-label">방위각 (Heading)</div>
                 <div class="data-value" id="imu-val">--°</div>
+                <div class="data-sub" id="imu-raw-val">RAW --°</div>
             </div>
             <div class="data-card">
                 <div class="data-label">경로 편차 (CTE)</div>
@@ -572,6 +575,7 @@ function update(){
         imuEl.style.color = "#fff";
         imuEl.style.textShadow = "0 0 8px rgba(255,255,255,0.4)";
     }
+    document.getElementById('imu-raw-val').innerText = 'RAW ' + (t.imu_raw_heading==null?'--':Number(t.imu_raw_heading).toFixed(1)) + '°';
 
     document.getElementById('cte-val').innerText=(t.cross_track_m==null?'--':Number(t.cross_track_m).toFixed(2)+' m');
     
@@ -769,7 +773,8 @@ class WebDashboardNode(Node):
             self.last_imu_time = time.time()
             obj = json.loads(msg.data.replace("'", '"'))
             with telemetry_lock:
-                if "heading_deg" in obj: telemetry_data["imu_heading"] = obj["heading_deg"]
+                # imu_heading은 main_fusion의 보정 방위(/vehicle_status)만 사용, 원시 yaw는 별도 키로 보관
+                if "heading_deg" in obj: telemetry_data["imu_raw_heading"] = obj["heading_deg"]
                 if "heading_rate_dps" in obj: telemetry_data["imu_gz"] = obj["heading_rate_dps"]
         except Exception:
             pass
