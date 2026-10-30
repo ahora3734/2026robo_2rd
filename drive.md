@@ -1,7 +1,7 @@
 # 🏎️ ESP32 수동 주행 제어 가이드 (`drive.py`)
 
 > **`drive.py`**는 ROS 2 환경 없이도 Jetson Orin Nano 터미널(또는 SSH)에서 키보드 입력을 통해 고카트(ESP32 모터 제어기)를 실시간으로 직접 수동 원격 조종(Teleoperation)할 수 있도록 제작된 단독 CLI 제어 스크립트입니다.
-ㅇㅇㅇ
+ㅇ
 ---
 
 ## 📌 목차
