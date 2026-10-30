@@ -61,7 +61,7 @@ class MainFusionNode(Node):
         self.declare_parameter("heading_correction_max_rate_dps", 10.0)
         self.declare_parameter("heading_correction_max_steer", 8.0)
         self.declare_parameter("require_align", True)         # 출발 시 직진 정렬 단계 사용
-        self.declare_parameter("align_distance_m", 4.0)
+        self.declare_parameter("align_distance_m", 2.5)
         self.declare_parameter("align_pwm", 90)
         # 고정 장애물 회피: 판단 정지 -> 대기 -> (필요 시 후진) -> 정지 조향 -> 회피 -> 경로 복귀
         self.declare_parameter("obstacle_decision_dist", 2.0)   # 이 거리에서 정지 후 판단
