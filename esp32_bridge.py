@@ -58,6 +58,9 @@ class ESP32Bridge(Node):
             pwm = max(-255, min(255, pwm))
             steer = max(-100.0, min(100.0, steer))
 
+            # 하드웨어는 음수 PWM이 전진 (drive.py와 동일하게 부호 반전, 양수 = 전진은 main_fusion 규약)
+            pwm = -pwm
+
             # 정지 조향 요청 시에만 세 번째 필드(HOLD=1) 추가 (펌웨어는 두 형식 모두 지원)
             if steer_hold:
                 command_str = f"<{pwm},{steer:.2f},1>\n"
