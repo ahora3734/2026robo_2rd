@@ -1,4 +1,3 @@
-# yolo26n.py
 #!/usr/bin/env python3
 import glob
 import os
@@ -16,6 +15,7 @@ from ultralytics import YOLO
 class YoloVisionNode(Node):
     def __init__(self):
         super().__init__("yolo_vision_node")
+        # ---- 파라미터 선언 ----
         self.declare_parameter("model_path", "yolo26n.pt")
         self.declare_parameter("camera_id", "/dev/robot_cam")
         self.declare_parameter("frame_width", 640)
@@ -25,10 +25,11 @@ class YoloVisionNode(Node):
         self.declare_parameter("stop_ratio", 0.40)
         self.declare_parameter("near_ratio", 0.15)
         self.declare_parameter("publish_rate", 30.0)
-        self.declare_parameter("jpeg_quality", 80)
+        self.declare_parameter("jpeg_quality", 70)  # 품질 70% 로 낮춤
         self.declare_parameter("center_roi_half_width", 0.30)
         self.declare_parameter("status_confirm_frames", 2)
 
+        # ---- 파라미터 로드 ----
         self.model_path = str(self.get_parameter("model_path").value)
         cam = self.get_parameter("camera_id").value
         cam_text = str(cam)
@@ -45,33 +46,37 @@ class YoloVisionNode(Node):
         self.roi_half = float(self.get_parameter("center_roi_half_width").value)
         self.confirm_frames = int(self.get_parameter("status_confirm_frames").value)
 
+        # ---- 퍼블리셔 ----
         self.pub_status = self.create_publisher(String, "/vision_info", 10)
         self.pub_img = self.create_publisher(CompressedImage, "/yolo_stream", 10)
 
+        # ---- 디바이스 설정 ----
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.use_half = self.device == "cuda"
         self.get_logger().info(f"🚀 YOLO 로딩: {self.model_path} | device={self.device}")
-        
+
+        # ---- 모델 로드 ----
         self.model = YOLO(self.model_path)
         self.model.to(self.device)
 
+        # ---- 카메라 초기화 ----
         self.cap = None
         self.running = True
         self.status_candidate = "CLEAR"
         self.status_count = 0
         self.stable_status = "CLEAR"
 
-        # [버그 수정] 비동기 카메라 프레임 글로벌 버퍼
+        # 비동기 카메라 프레임 버퍼
         self.latest_raw_frame = None
         self.frame_lock = threading.Lock()
 
         self.init_camera()
-        
-        # 카메라 영상만 미친듯이 읽어 최신 1프레임만 남기는 독립 스레드 (지연 방지)
+
+        # 최신 프레임만 유지하는 독립 스레드
         self.reader_thread = threading.Thread(target=self.camera_reader_loop, daemon=True)
         self.reader_thread.start()
 
-        # YOLO 추론 및 송출 타이머 (publish_rate 에 맞춰 동작)
+        # YOLO 추론 및 스트리밍 타이머
         self.timer = self.create_timer(1.0 / publish_rate, self.detect_and_stream)
 
     def test_camera_port(self, port):
@@ -83,15 +88,15 @@ class YoloVisionNode(Node):
                 cap = cv2.VideoCapture(port)
             if not cap.isOpened():
                 return False, None
-            
-            # [버그 수정] Buffer Stacking 방지 설정
+            # ---- 오래된 프레임 스택 방지 ----
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            try: cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            except: pass
+            try:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            except:
+                pass
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
             cap.set(cv2.CAP_PROP_FPS, self.camera_fps)
-            
             for _ in range(3):
                 ret, frame = cap.read()
                 if ret and frame is not None:
@@ -100,15 +105,18 @@ class YoloVisionNode(Node):
             cap.release()
             return False, None
         except Exception:
-            if cap is not None: cap.release()
+            if cap is not None:
+                cap.release()
             return False, None
 
     def find_available_camera(self):
         scan_ports = [self.camera_id]
         for i in range(11):
-            if f"/dev/video{i}" not in scan_ports: scan_ports.append(f"/dev/video{i}")
+            if f"/dev/video{i}" not in scan_ports:
+                scan_ports.append(f"/dev/video{i}")
         for port in scan_ports:
-            if isinstance(port, str) and not os.path.exists(port): continue
+            if isinstance(port, str) and not os.path.exists(port):
+                continue
             ok, cap = self.test_camera_port(port)
             if ok:
                 self.camera_id = port
@@ -126,13 +134,12 @@ class YoloVisionNode(Node):
             self.get_logger().error("❌ 카메라를 찾을 수 없습니다.")
 
     def camera_reader_loop(self):
-        """ V4L2 큐에 쌓인 과거 프레임을 버리고 항상 최신 프레임 1장만 유지하는 비동기 루프 """
+        """V4L2 큐에 쌓인 과거 프레임을 버리고 최신 프레임 1장만 유지한다."""
         while self.running and rclpy.ok():
             if self.cap is None or not self.cap.isOpened():
                 time.sleep(1.0)
                 self.init_camera()
                 continue
-            
             ret, frame = self.cap.read()
             if ret and frame is not None:
                 with self.frame_lock:
@@ -156,27 +163,35 @@ class YoloVisionNode(Node):
         return self.stable_status
 
     def detect_and_stream(self):
+        # 최신 프레임 확보 (락 최소화)
         with self.frame_lock:
             if self.latest_raw_frame is None:
                 return
-            # 가장 최신 프레임 복사
             frame = self.latest_raw_frame.copy()
-            # 같은 프레임 중복 처리 방지 (옵션)
-            self.latest_raw_frame = None 
-        
+            self.latest_raw_frame = None
+
+        # YOLO 추론
         try:
-            results = self.model(frame, classes=[0, 2], conf=self.conf_thresh, half=self.use_half, verbose=False, device=self.device)
+            results = self.model(
+                frame,
+                classes=[0, 2],
+                conf=self.conf_thresh,
+                half=self.use_half,
+                verbose=False,
+                device=self.device,
+            )
         except Exception:
             return
 
         result = results[0]
         annotated = result.plot()
+
+        # 상태 판단 (원본 로직 그대로)
         frame_h, frame_w = frame.shape[:2]
         roi_left = int(frame_w * (0.5 - self.roi_half))
         roi_right = int(frame_w * (0.5 + self.roi_half))
         max_person_ratio = 0.0
         has_car_center = False
-        
         for box in result.boxes:
             cls_id = int(box.cls[0].item())
             x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
@@ -187,17 +202,23 @@ class YoloVisionNode(Node):
                 max_person_ratio = max(max_person_ratio, ratio)
             elif cls_id == 2 and in_center:
                 has_car_center = True
-                
         candidate = "CLEAR"
-        if max_person_ratio >= self.stop_ratio: candidate = "PERSON_FRONT"
-        elif max_person_ratio >= self.near_ratio: candidate = "PERSON_NEAR"
-        elif has_car_center: candidate = "CAR"
-        
+        if max_person_ratio >= self.stop_ratio:
+            candidate = "PERSON_FRONT"
+        elif max_person_ratio >= self.near_ratio:
+            candidate = "PERSON_NEAR"
+        elif has_car_center:
+            candidate = "CAR"
         status = self.stable_status_update(candidate)
         self.pub_status.publish(String(data=status))
-        
+
+        # JPEG 인코딩 (품질 70)
         try:
-            ok, buffer = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+            ok, buffer = cv2.imencode(
+                ".jpg",
+                annotated,
+                [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+            )
             if ok and buffer is not None:
                 msg = CompressedImage()
                 msg.format = "jpeg"

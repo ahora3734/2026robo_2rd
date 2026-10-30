@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 web_dashboard.py
-============================================================
+=============================================================
 통합 관제탑 웹 서버 및 실시간 텔레메트리/스트리밍 전용 노드
 - Flask 웹 서버 (Port 5000)
 - 4분할 사이버펑크 관제 대시보드 (Leaflet 지도, YOLO 카메라, 10m 레이더/SLAM, 디지털 클러스터)
 - 실시간 카메라 비동기 Zero-Latency 스트리밍 (/video_feed)
 - SLAM OccupancyGrid 맵의 실시간 Base64 PNG 변환
 - 목적지 설정 명령을 ROS 2 토픽(/set_destination)으로 송출
-============================================================
+=============================================================
 """
 
 import base64
@@ -38,6 +38,7 @@ new_frame_event = threading.Event()
 
 latest_map = None
 latest_scan = []
+
 map_lock = threading.Lock()
 
 gps_lock = threading.Lock()
@@ -88,11 +89,11 @@ INDEX_HTML = r"""
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>학교 자율주행 통합 관제탑</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">
+<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidden}
@@ -141,9 +142,10 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
 .fast button:hover{background:#00aaff;color:#fff;box-shadow:0 0 10px #00aaff}
 .search{display:flex;gap:5px;margin-top:5px}
 .search input{flex:1;padding:6px;background:#111;border:1px solid #444;color:#fff;border-radius:4px}
-.search button{padding:6px 10px;background:#00aa00;border:0;color:white;border-radius:4px;cursor:pointer}
+.search button{padding:10px 10px;background:#00aa00;border:0;color:white;border-radius:4px;cursor:pointer}
+
 .gps{position:absolute;bottom:7px;left:7px;z-index:1000;background:rgba(0,0,0,.8);padding:5px 8px;border-radius:4px;font-size:10px;color:#00ff00}
-.slam-label{position:absolute;right:8px;top:8px;z-index:5;background:rgba(0,0,0,.7);padding:5px 7px;border-radius:4px;font-size:10px;color:#0ff;border:1px solid #0ff}
+.slam-label{position:absolute;right:8px;top:8px;z-index:5;background:rgba(0,0,0,.7);padding:7px 7px;border-radius:4px;font-size:10px;color:#0ff;border:1px solid #0ff}
 .legend{position:absolute;left:8px;bottom:8px;z-index:5;background:rgba(0,0,0,.7);padding:6px 8px;border-radius:4px;font-size:10px;color:#aaa}
 
 /* Steer Calibration Box */
@@ -234,7 +236,7 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
             <div class="led-item"><span class="led" id="led-imu"></span> IMU</div>
             <div class="led-item"><span class="led" id="led-cam"></span> YOLO</div>
         </div>
-
+        
         <div class="steer-calibration-box">
             <div class="steer-calib-header">
                 <span class="steer-title">🎯 핸들 조향각 & 가변저항 캘리브레이션</span>
@@ -284,7 +286,6 @@ body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidd
             </div>
         </div>
     </div>
-</div>
 </div>
 </div>
 <div class="estop-hint">⌨ SPACE 비상정지 | R 해제</div>
@@ -357,9 +358,9 @@ function renderRadar() {
     const maxDist = 10.0; 
     const maxRadius = Math.min(cx, cy) - 20;
     const ppm = maxRadius / maxDist; 
-
+    
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+    
     if (currentMapImage && currentMapInfo) {
         ctx.save();
         const w = currentMapInfo.height * currentMapInfo.resolution * ppm; 
@@ -372,7 +373,7 @@ function renderRadar() {
         ctx.drawImage(currentMapImage, top_left_x, top_left_y, w, h);
         ctx.restore();
     }
-
+    
     // 180도 화각 부채꼴 & 후방 음영
     ctx.save();
     ctx.translate(cx, cy);
@@ -385,7 +386,7 @@ function renderRadar() {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
     ctx.fill();
     ctx.restore();
-
+    
     // 동심원 (2.5m, 5.0m, 7.5m, 10.0m)
     ctx.save();
     ctx.translate(cx, cy);
@@ -403,7 +404,7 @@ function renderRadar() {
         ctx.fillText(r + 'M', 0, -rad - 4);
     });
     ctx.restore();
-
+    
     // 방위각 가이드선
     ctx.save();
     ctx.translate(cx, cy);
@@ -418,7 +419,7 @@ function renderRadar() {
     });
     ctx.stroke();
     ctx.restore();
-
+    
     // 스위프 애니메이션
     radarAngle -= 0.04; 
     if(radarAngle < 0) radarAngle = 2 * Math.PI;
@@ -440,7 +441,7 @@ function renderRadar() {
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
-
+    
     // LiDAR 스캔 포인트 (10.0m 스케일 변환 및 네온 효과)
     ctx.save();
     ctx.translate(cx, cy);
@@ -449,28 +450,28 @@ function renderRadar() {
         const angle = p[1]; 
         
         if(dist <= 0.0 || dist > maxDist || !isFinite(dist)) continue;
-
+        
         const x = dist * Math.cos(angle); 
         const y = dist * Math.sin(angle); 
-
+        
         const ratio = maxRadius / maxDist;
         const px = -y * ratio;
         const py = -x * ratio;
-
+        
         let color = '#00ffff'; 
         if(dist <= 1.5) color = '#ff003c'; 
         else if (dist <= 3.0) color = '#ffea00'; 
-
+        
         ctx.shadowBlur = 10; 
-        ctx.shadowColor = color;
-        ctx.fillStyle = color;
+        ctx.shadowColor = color; 
+        ctx.fillStyle = color; 
         
         ctx.beginPath();
         ctx.arc(px, py, 2.5, 0, 2 * Math.PI);
         ctx.fill();
     }
     ctx.restore();
-
+    
     // 로봇 아이콘 (Aviation Arrow)
     ctx.save();
     ctx.translate(cx, cy);
@@ -485,7 +486,7 @@ function renderRadar() {
     ctx.closePath();
     ctx.fill();
     ctx.restore();
-
+    
     requestAnimationFrame(renderRadar);
 }
 requestAnimationFrame(renderRadar);
@@ -512,7 +513,7 @@ function renderEstop() {
         : 'R 키를 누르면 자율주행을 재개합니다';
 }
 
-// capture 단계에서 처리 -> 지도/입력창 등 다른 요소가 키를 가로채지 못함
+// capture 단계에서 처리 - 지도/입력창 등 다른 요소가 키를 가로채지 못함
 // SPACE는 입력창에 포커스가 있어도 항상 정지 (안전 우선)
 window.addEventListener('keydown', e => {
     if (e.code === 'Space') {
@@ -548,13 +549,13 @@ function update(){
 
     robot.setLatLng([g.lat,g.lon]);
     if(!interacting)map.panTo([g.lat,g.lon]);
-    
+
     if(r.path && r.path.length > 0) { route.setLatLngs(r.path); } else { route.setLatLngs([]); }
-    
+
     document.getElementById('nav-desc').innerText=r.next_wp_desc;
     document.getElementById('nav-dist').innerText=d.has_dest?('다음 지점까지 '+r.dist_to_next_wp+'m'):'대기 중...';
     document.getElementById('gps-info').innerText=g.quality+' | '+Number(g.lat).toFixed(6)+', '+Number(g.lon).toFixed(6);
-    
+
     // PWM Gauge
     const pwmVal = Number(t.pwm||t.speed_pwm||0).toFixed(0);
     document.getElementById('pwm').innerText = pwmVal;
@@ -563,7 +564,7 @@ function update(){
 
     document.getElementById('state').innerText=t.state||t.fusion_state||'WAITING';
     document.getElementById('mode').innerText=t.status_msg||'--';
-    
+
     // IMU Data & FAULT UI Sync
     const imuEl = document.getElementById('imu-val');
     if(!t.imu_active) {
@@ -578,7 +579,7 @@ function update(){
     document.getElementById('imu-raw-val').innerText = 'RAW ' + (t.imu_raw_heading==null?'--':Number(t.imu_raw_heading).toFixed(1)) + '°';
 
     document.getElementById('cte-val').innerText=(t.cross_track_m==null?'--':Number(t.cross_track_m).toFixed(2)+' m');
-    
+
     const lidarFront = Number(t.lidar_front||0);
     const lidarEl = document.getElementById('lidar-val');
     lidarEl.innerText = lidarFront > 0 ? lidarFront.toFixed(2)+' m' : '--';
@@ -593,9 +594,9 @@ function update(){
     const potVal = Number(t.pot_raw != null ? t.pot_raw : 2048);
     const steerTarget = Number(t.steer || 0);
 
-    document.getElementById('steer-angle-val').innerText = (steerCur >= 0 ? '+' : '') + steerCur.toFixed(1) + '°';
+    document.getElementById('steer-angle-val').innerText = (steerCur >= 0 ? '+' : '-') + Math.abs(steerCur).toFixed(1) + '°';
     document.getElementById('pot-adc-val').innerText = 'POT: ' + potVal;
-    document.getElementById('steer-target-val').innerText = (steerTarget >= 0 ? '+' : '') + steerTarget.toFixed(1) + '°';
+    document.getElementById('steer-target-val').innerText = (steerTarget >= 0 ? '+' : '-') + Math.abs(steerTarget).toFixed(1) + '°';
 
     const steerPercent = Math.min(100, Math.max(0, ((steerCur + 35.0) / 70.0) * 100));
     document.getElementById('steer-pin').style.left = steerPercent + '%';
@@ -615,9 +616,9 @@ function update(){
     // Sensor LEDs Update
     setLedStatus('led-gps', g.is_real_gps);
     setLedStatus('led-lidar', lidarFront > 0 && lidarFront < 12.0);
-    setLedStatus('led-imu', t.imu_active); 
+    setLedStatus('led-imu', t.imu_active);
     setLedStatus('led-cam', t.vision !== null && t.vision !== '');
-    
+
     currentScan = d.scan || [];
     if(d.slam_map && d.slam_map.image_b64) {
         if(currentMapB64 !== d.slam_map.image_b64) {
@@ -633,8 +634,11 @@ setInterval(update,500);
 update();
 </script>
 </body>
-</html>
-"""
+</html>"""
+
+@app.route("/")
+def index():
+    return render_template_string(INDEX_HTML)
 
 class WebDashboardNode(Node):
     def __init__(self):
@@ -707,10 +711,9 @@ class WebDashboardNode(Node):
         global latest_scan
         pts = []
         angle = msg.angle_min
-        inc = msg.angle_increment if msg.angle_increment > 0 else 0.005 
+        inc = msg.angle_increment if msg.angle_increment > 0 else 0.005
         num_points = len(msg.ranges)
         step = max(1, num_points // 150) if num_points > 0 else 1
-
         for i, dist in enumerate(msg.ranges):
             if i % step == 0 and math.isfinite(dist) and 0.1 <= dist <= 10.0:
                 pts.append([round(dist, 3), round(angle, 3)])
@@ -722,23 +725,17 @@ class WebDashboardNode(Node):
         w = msg.info.width
         h = msg.info.height
         if w == 0 or h == 0: return
-
         try:
             arr = np.array(msg.data, dtype=np.int8).reshape((h, w))
             img_rgba = np.zeros((h, w, 4), dtype=np.uint8)
-
             free_mask = (arr >= 0) & (arr <= 20)
             img_rgba[free_mask] = [30, 40, 50, 100]
-
             occ_mask = arr > 65
             img_rgba[occ_mask] = [255, 255, 0, 255]
-
             img_rot = np.rot90(img_rgba, k=1)
             img_final = np.fliplr(img_rot)
-
             _, buffer = cv2.imencode('.png', img_final)
             b64_str = base64.b64encode(buffer).decode('utf-8')
-
             with map_lock:
                 latest_map = {
                     "info": {
@@ -773,7 +770,6 @@ class WebDashboardNode(Node):
             self.last_imu_time = time.time()
             obj = json.loads(msg.data.replace("'", '"'))
             with telemetry_lock:
-                # imu_heading은 main_fusion의 보정 방위(/vehicle_status)만 사용, 원시 yaw는 별도 키로 보관
                 if "heading_deg" in obj: telemetry_data["imu_raw_heading"] = obj["heading_deg"]
                 if "heading_rate_dps" in obj: telemetry_data["imu_gz"] = obj["heading_rate_dps"]
         except Exception:
@@ -792,114 +788,35 @@ class WebDashboardNode(Node):
         except Exception:
             pass
 
-
-# Zero-Latency 비동기 제너레이터
+# Zero‑Latency 비동기 제너레이터
 def generate_camera_stream():
     global latest_yolo_frame
     while True:
         if new_frame_event.wait(timeout=0.5):
-            new_frame_event.clear()
             with yolo_lock:
-                frame = latest_yolo_frame
-            if frame is not None:
-                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
-
-@app.route("/")
-def index():
-    return render_template_string(INDEX_HTML)
+                frame_bytes = latest_yolo_frame
+                new_frame_event.clear()
+            if frame_bytes:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        else:
+            placeholder = np.zeros((360, 640, 3), dtype=np.uint8)
+            ret, jpeg = cv2.imencode('.jpg', placeholder)
+            frame_bytes = jpeg.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
 @app.route("/video_feed")
 def video_feed():
-    return Response(generate_camera_stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    return Response(generate_camera_stream(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route("/api/data")
-def api_data():
-    with gps_lock: gps = dict(gps_data)
-    with route_lock: route = dict(route_data)
-    with telemetry_lock:
-        tele = dict(telemetry_data)
-        if ros_node is not None:
-            tele["imu_active"] = (time.time() - ros_node.last_imu_time) <= 1.0
-        else:
-            tele["imu_active"] = False
-
-    with map_lock: slam_map = latest_map
-    return jsonify({
-        "gps": gps,
-        "route": route,
-        "has_dest": has_destination,
-        "telemetry": tele,
-        "slam_map": slam_map,
-        "scan": latest_scan,
-    })
-
-@app.route("/api/set_destination", methods=["POST"])
-def set_destination_api():
-    data = request.json or {}
-    if ros_node is not None:
-        ros_node.pub_dest.publish(String(data=json.dumps(data, ensure_ascii=False)))
-        return jsonify({"status": "ok"})
-    return jsonify({"status": "error", "msg": "ROS 노드 미구동"})
-
-@app.route("/api/estop", methods=["POST"])
-def estop_api():
-    cmd = str((request.json or {}).get("cmd", "")).strip().upper()
-    if cmd not in ("STOP", "RELEASE"):
-        return jsonify({"status": "error", "msg": "cmd는 STOP 또는 RELEASE"}), 400
-    if ros_node is not None:
-        ros_node.pub_estop.publish(String(data=cmd))
-        return jsonify({"status": "ok"})
-    return jsonify({"status": "error", "msg": "ROS 노드 미구동"}), 503
-
-@app.route("/api/search_poi", methods=["POST"])
-def search_poi():
-    keyword = (request.json or {}).get("keyword", "").strip()
-    if not keyword or not TMAP_APP_KEY: return jsonify({"results": []})
-    
-    params = {
-        "version": 1, "searchKeyword": keyword, "count": 5,
-        "reqCoordType": "WGS84GEO", "resCoordType": "WGS84GEO", "searchCoordType": "WGS84GEO"
-    }
-    try:
-        r = requests.get(
-            "https://apis.openapi.sk.com/tmap/pois",
-            headers={"appKey": TMAP_APP_KEY},
-            params=params,
-            timeout=5,
-        )
-        r.raise_for_status()
-        pois = r.json().get("searchPoiInfo", {}).get("pois", {}).get("poi", [])
-        results = []
-        for p in pois:
-            try:
-                lat = float(p.get("frontLat") or p.get("noorLat"))
-                lon = float(p.get("frontLon") or p.get("noorLon"))
-            except Exception: continue
-            results.append({"name": p.get("name"), "lat": lat, "lon": lon})
-        return jsonify({"results": results})
-    except Exception:
-        return jsonify({"results": []})
-
-def run_ros2():
-    global ros_node
-    rclpy.init()
-    ros_node = WebDashboardNode()
-    try:
-        rclpy.spin(ros_node)
-    finally:
-        ros_node.destroy_node()
-        ros_node = None
-        if rclpy.ok(): rclpy.shutdown()
+def main(args=None):
+    rclpy.init(args=args)
+    node = WebDashboardNode()
+    ros_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    ros_thread.start()
+    app.run(host="0.0.0.0", port=5000, threaded=True, use_reloader=False)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_ros2, daemon=True).start()
-    threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True),
-        daemon=True
-    ).start()
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        pass
+    main()
