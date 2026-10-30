@@ -68,13 +68,15 @@ const unsigned long TELEMETRY_INTERVAL_MS = 50; // 20Hz 주기로 젯슨에 상�
 // 기어 파손 방지: 스톨 차단 (연속 구동 시간이 아니라 '진행 없음'으로 판정)
 // - 모터를 돌리는데 STEER_STALL_TIMEOUT_MS 동안 pot ADC가 STEER_STALL_MIN_PROGRESS_ADC 이상 변하지 않으면 스톨
 // - 커브에서 목표각이 계속 바뀌어 모터가 오래 돌아도, 핸들이 움직이고 있으면 스톨로 보지 않음
-const unsigned long STEER_STALL_TIMEOUT_MS = 300;
+// [BUG FIX] 300 → 500ms : 고마찰/무거운 조향 시 초기 움직임 지연으로 인한 오탐(False Stall) 방지
+const unsigned long STEER_STALL_TIMEOUT_MS = 500;
 const float STEER_STALL_MIN_PROGRESS_ADC = 15.0;
 unsigned long steer_motor_start_time = 0;   // 마지막으로 진행이 확인된 시각 (0이면 모터 정지 상태)
 float steer_progress_ref_adc = 0.0;         // 마지막으로 진행이 확인된 시점의 ADC
 
 // [REVIEW #5] 스톨 발생 시: 구동 모터까지 정지 + 텔레메트리 fault 보고 + 일정 시간 후 재시도
-const unsigned long STEER_STALL_COOLDOWN_MS = 1000;
+// [BUG FIX] 1000 → 2000ms : 스톨 후 재시도 간격 확대, 기어 쿨다운 시간 충분히 확보
+const unsigned long STEER_STALL_COOLDOWN_MS = 2000;
 bool steer_stall_fault = false;
 unsigned long steer_stall_time = 0;
 

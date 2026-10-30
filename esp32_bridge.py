@@ -32,7 +32,8 @@ class ESP32Bridge(Node):
                 except Exception:
                     pass
             # 블로킹 방지를 위해 timeout, write_timeout 명시
-            self.ser = serial.Serial(self.port, self.baudrate, timeout=0.05, write_timeout=0.05)
+            # [BUG FIX] write_timeout 0.05 → 0.1 : ESP32 처리 지연 시 SerialTimeoutException 방지
+            self.ser = serial.Serial(self.port, self.baudrate, timeout=0.05, write_timeout=0.1)
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
             self.get_logger().info(f"✅ ESP32 시리얼 연결 성공: {self.port}")
@@ -56,7 +57,9 @@ class ESP32Bridge(Node):
             steer_hold = bool(data.get('steer_hold', False))
 
             pwm = max(-255, min(255, pwm))
-            steer = max(-100.0, min(100.0, steer))
+            # [BUG FIX] 브릿지 조향 클램프를 펌웨어 MAX_STEER_ANGLE_DEG(35°)와 일치시킴
+            # 기존 ±100 → ±35 : main_fusion에서 이미 클램프하지만, 방어적으로 여기서도 동일하게 맞춤
+            steer = max(-35.0, min(35.0, steer))
 
             # 하드웨어는 음수 PWM이 전진 (drive.py와 동일하게 부호 반전, 양수 = 전진은 main_fusion 규약)
             pwm = -pwm
