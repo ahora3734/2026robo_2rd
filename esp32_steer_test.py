@@ -218,7 +218,7 @@ try:
             d = int(end["pot"]) - start_pot
             print(f"pot 변화: {start_pot} -> {int(end['pot'])} ({'+' if d >= 0 else ''}{d})")
         if reached is not None:
-            print(f"✅ 목표 도달 시간: {reached:.2f}초 (도중에 0.3초 이상 멈추면 펌웨어 STALL 판정에 걸림)")
+            print(f"✅ 목표 도달 시간: {reached:.2f}초 (도중에 0.5초 이상 멈추면 펌웨어 STALL 판정에 걸림)")
         else:
             print("❌ 목표에 도달하지 못함 -> 방향이 반대거나(REVERSE_*), 모터 힘/배선 문제")
         print("확인: 핸들이 실제로 오른쪽(+) / 왼쪽(-)으로 돌았나요?")

@@ -205,6 +205,7 @@ class MainFusionNode(Node):
         self.steer_prep_start = 0.0
         self.reverse_start = 0.0
         self.reverse_count = 0
+        self.start_center_begin = None
 
         self.esp32_steer_cur = 0.0
         self.esp32_steer_time = 0.0
@@ -681,6 +682,16 @@ class MainFusionNode(Node):
             return 0, 0.0, "조향 준비 실패 - 재시도 대기"
         return 0, target, "정지 상태에서 회피 방향 조향"
 
+    def start_centering(self, now):
+        """정렬 직진 출발 전: 정지 상태에서 핸들을 중앙으로 맞추는 중이면 True (시간 초과 시 그대로 출발)"""
+        fresh = (now - self.esp32_steer_time) <= 0.3
+        if self.current_pwm > 0.0 or not fresh or abs(self.esp32_steer_cur) <= self.steer_prep_tol:
+            self.start_center_begin = None
+            return False
+        if self.start_center_begin is None:
+            self.start_center_begin = now
+        return now - self.start_center_begin <= self.steer_prep_timeout
+
     def reverse_step(self, now):
         """조향 0으로 저속 직진 후진. 앞 장애물과의 거리가 확보되거나 시간 초과 시 정지 후 재판단"""
         if self.lidar_front >= self.reverse_target_front or now - self.reverse_start >= self.reverse_max:
@@ -833,6 +844,9 @@ class MainFusionNode(Node):
         if self.require_align and not self.heading_aligned:
             # [REVIEW #9] 출발 직후 진짜 방위를 모르므로 조향 0으로 직진하며 GPS course 측정
             self.state = "ALIGN"
+            if self.start_centering(now):
+                self.publish_state(self.hard_stop(), 0.0, "출발 전 핸들 중앙 정렬", steer_hold=True, raw_steer=True)
+                return
             pwm = self.ramp_pwm(self.obstacle_speed_cap(min(self.align_pwm, speed_cap)))
             self.publish_state(pwm, 0.0, "초기 방위 정렬 직진")
             return

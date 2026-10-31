@@ -49,6 +49,10 @@ const int STEER_MAX_PWM = 180;  // 조향 모터 안전 최대 PWM
 #define REVERSE_STEER_MOTOR  false
 #define REVERSE_POT_SENSOR   false
 
+// 조향 시작 불감대: 모터가 멈춰 있을 때는 오차가 이 값을 넘어야 다시 구동 (진동으로 핸들이 살짝 틀어져도 무시)
+// - 일단 구동을 시작하면 STEER_DEADBAND_DEG 이내까지 돌린 뒤 멈춤
+const float STEER_DEADBAND_START_DEG = 2.5;
+
 // --- [3. 통신 및 상태 변수] ---
 bool is_armed = false;
 int target_drive_pwm = 0;
@@ -68,7 +72,8 @@ const unsigned long TELEMETRY_INTERVAL_MS = 50; // 20Hz 주기로 젯슨에 상�
 // 기어 파손 방지: 스톨 차단 (연속 구동 시간이 아니라 '진행 없음'으로 판정)
 // - 모터를 돌리는데 STEER_STALL_TIMEOUT_MS 동안 pot ADC가 STEER_STALL_MIN_PROGRESS_ADC 이상 변하지 않으면 스톨
 // - 커브에서 목표각이 계속 바뀌어 모터가 오래 돌아도, 핸들이 움직이고 있으면 스톨로 보지 않음
-const unsigned long STEER_STALL_TIMEOUT_MS = 300;
+// - 진행이 없는 동안 PWM을 STEER_MAX_PWM까지 서서히 올려 정지 마찰을 이겨냄
+const unsigned long STEER_STALL_TIMEOUT_MS = 500;
 const float STEER_STALL_MIN_PROGRESS_ADC = 15.0;
 unsigned long steer_motor_start_time = 0;   // 마지막으로 진행이 확인된 시각 (0이면 모터 정지 상태)
 float steer_progress_ref_adc = 0.0;         // 마지막으로 진행이 확인된 시점의 ADC
@@ -77,6 +82,10 @@ float steer_progress_ref_adc = 0.0;         // 마지막으로 진행이 확인�
 const unsigned long STEER_STALL_COOLDOWN_MS = 1000;
 bool steer_stall_fault = false;
 unsigned long steer_stall_time = 0;
+// 오차가 이 값보다 작은 스톨이나 정지 조향 중 스톨은 fault가 아님: 조향 모터만 쉬고 주행은 계속
+// - main_fusion의 steer_track_error_deg와 같은 값 (실제 추종 실패는 STEER_TRACK으로도 감시됨)
+const float STEER_STALL_FAULT_ERROR_DEG = 10.0;
+bool steer_stall_resting = false;
 
 // [REVIEW #24] 구동 모터 PWM 주파수 및 정/역 전환 데드타임
 // - 모터 드라이버가 지원하는 주파수인지 데이터시트 확인 (BTS7960 등은 ~25kHz 지원)
@@ -236,12 +245,13 @@ void updatePotentiometer() {
 // ==============================================================================
 void controlSteerClosedLoop() {
   // [REVIEW #5] 스톨 fault 상태: 조향 모터 OFF 유지, 쿨다운 후 재시도 (구동 모터는 controlDriveMotors에서 정지)
-  if (steer_stall_fault) {
+  if (steer_stall_fault || steer_stall_resting) {
     if (millis() - steer_stall_time < STEER_STALL_COOLDOWN_MS) {
       analogWrite(STEER_PWM_PIN, 0);
       return;
     }
     steer_stall_fault = false;
+    steer_stall_resting = false;
     steer_motor_start_time = 0;
   }
 
@@ -269,7 +279,9 @@ void controlSteerClosedLoop() {
   }
 
   // [기어 보호 3] 불감대(Deadband) 내에 도달하면 조향 모터 정지
-  if (abs(error) <= STEER_DEADBAND_DEG) {
+  // 멈춰 있을 때는 STEER_DEADBAND_START_DEG를 넘어야 구동 시작, 구동 중에는 STEER_DEADBAND_DEG까지 돌림
+  float deadband = (steer_motor_start_time == 0) ? STEER_DEADBAND_START_DEG : STEER_DEADBAND_DEG;
+  if (abs(error) <= deadband) {
     analogWrite(STEER_PWM_PIN, 0);
     steer_motor_start_time = 0;
     return;
@@ -284,10 +296,15 @@ void controlSteerClosedLoop() {
     steer_motor_start_time = millis();
     steer_progress_ref_adc = filtered_pot_adc;
   } else if (millis() - steer_motor_start_time > STEER_STALL_TIMEOUT_MS) {
-    // 0.3초 동안 핸들이 거의 움직이지 않으면 기어 파손 방지 차단
-    // [REVIEW #5] fault로 기록 -> 구동 모터 정지 + 텔레메트리 보고 + 쿨다운 후 재시도
+    // 0.5초 동안 핸들이 거의 움직이지 않으면 기어 파손 방지 차단
+    // [REVIEW #5] 주행 중 오차가 크면 fault로 기록 -> 구동 모터 정지 + 텔레메트리 보고 + 쿨다운 후 재시도
+    // 오차가 작거나 정지 조향 중이면 조향 모터만 쉬고 쿨다운 후 재시도 (주행 유지)
     analogWrite(STEER_PWM_PIN, 0);
-    steer_stall_fault = true;
+    if (target_drive_pwm != 0 && abs(error) >= STEER_STALL_FAULT_ERROR_DEG) {
+      steer_stall_fault = true;
+    } else {
+      steer_stall_resting = true;
+    }
     steer_stall_time = millis();
     steer_motor_start_time = 0;
     return;
@@ -295,6 +312,11 @@ void controlSteerClosedLoop() {
 
   // P 비례 제어로 필요 모터 속도 산출
   int steer_pwm = (int)(abs(error) * STEER_KP * 10.0f);
+  steer_pwm = constrain(steer_pwm, STEER_MIN_PWM, STEER_MAX_PWM);
+
+  // 핸들이 안 움직이는 시간에 비례해 PWM 상승 (움직이기 시작하면 위에서 시각이 갱신되어 원래 값으로 복귀)
+  unsigned long stuck_ms = millis() - steer_motor_start_time;
+  steer_pwm += (int)((STEER_MAX_PWM - steer_pwm) * stuck_ms / STEER_STALL_TIMEOUT_MS);
   steer_pwm = constrain(steer_pwm, STEER_MIN_PWM, STEER_MAX_PWM);
 
   // 회전 방향 결정
