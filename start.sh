@@ -110,8 +110,31 @@ if [ -f "${SCRIPT_DIR}/install/setup.bash" ]; then
   set -u
 fi
 
-# 하드웨어 권한 자동 개방
+# 하드웨어 권한 자동 개방 및 ESP32 포트 심볼릭 링크 자동 탐색/복구
 # [REVIEW #19] 코드가 여는 이름(/dev/gps, /dev/robot_cam)도 포함. udev 규칙과 이름을 하나로 통일 권장
+ensure_esp32_symlink() {
+  if [ -e "/dev/esp32" ]; then
+    return 0
+  fi
+  # /dev/rplidar, /dev/imu, /dev/ublox_gps, /dev/gps가 가리키는 실제 디바이스 제외
+  local used=""
+  for s in /dev/rplidar /dev/imu /dev/ublox_gps /dev/gps; do
+    if [ -e "${s}" ]; then
+      used="${used} $(readlink -f "${s}" 2>/dev/null || true)"
+    fi
+  done
+  for dev in /dev/ttyUSB* /dev/ttyACM*; do
+    [ -e "${dev}" ] || continue
+    local real_dev
+    real_dev="$(readlink -f "${dev}" 2>/dev/null || echo "${dev}")"
+    if [[ " ${used} " != *" ${real_dev} "* ]]; then
+      echo "🔍 /dev/esp32 미발견 -> 미할당 시리얼 포트(${real_dev})를 /dev/esp32 로 자동 연결합니다."
+      sudo ln -sf "${real_dev}" /dev/esp32 2>/dev/null || true
+      break
+    fi
+  done
+}
+ensure_esp32_symlink
 sudo chmod 666 /dev/esp32 /dev/rplidar /dev/imu /dev/gps /dev/ublox_gps /dev/robot_cam /dev/camera /dev/video* /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true
 
 echo "🧹 기존 잔여 프로세스 강제 정리..."

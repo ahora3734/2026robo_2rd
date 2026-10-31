@@ -1,11 +1,70 @@
 # esp32_bridge.py
 #!/usr/bin/env python3
+import glob
 import json
+import os
 import time
 import serial
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+
+
+def find_esp32_port(preferred_port="/dev/esp32", baudrate=115200):
+    """
+    ESP32 시리얼 포트를 자동 탐색합니다.
+    1) preferred_port(/dev/esp32)가 존재하면 최우선 사용
+    2) /dev/ttyUSB*, /dev/ttyACM* 중 다른 센서(/dev/rplidar, /dev/imu, /dev/ublox_gps, /dev/gps)에
+       할당된 포트를 제외한 후보들을 검사하여 ESP32 텔레메트리/부팅 응답이 오는 포트를 반환
+    """
+    if preferred_port and os.path.exists(preferred_port):
+        return preferred_port
+
+    # 다른 센서가 사용 중인 실제 디바이스 경로 수집 (충돌 방지)
+    excluded_realpaths = set()
+    for symlink in ("/dev/rplidar", "/dev/imu", "/dev/ublox_gps", "/dev/gps"):
+        if os.path.exists(symlink):
+            excluded_realpaths.add(os.path.realpath(symlink))
+
+    candidates = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+    filtered = [c for c in candidates if os.path.realpath(c) not in excluded_realpaths]
+
+    # 제외 후 남은 후보가 딱 1개뿐이면 프로빙 지연 없이 즉시 선택
+    if len(filtered) == 1:
+        return filtered[0]
+
+    # 후보가 여러 개면 115200bps로 짧게 읽어 ESP32 텔레메트리(JSON) 확인
+    for port in filtered:
+        s = None
+        try:
+            s = serial.Serial()
+            s.port = port
+            s.baudrate = baudrate
+            s.timeout = 0.25
+            s.write_timeout = 0.1
+            s.dtr = False
+            s.rts = False
+            s.open()
+            # DTR 리셋이 걸리는 보드도 고려하여 최대 0.6초 동안 확인
+            deadline = time.monotonic() + 0.6
+            buf = ""
+            while time.monotonic() < deadline:
+                chunk = s.read(s.in_waiting or 64).decode("utf-8", errors="ignore")
+                if chunk:
+                    buf += chunk
+                    if any(k in buf for k in ('"pot"', '"steer_cur"', "[ESP32]", "ets Jul", "rst:0x")):
+                        s.close()
+                        return port
+            s.close()
+        except Exception:
+            if s and s.is_open:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+    return filtered[0] if filtered else preferred_port
+
 
 class ESP32Bridge(Node):
     def __init__(self):
@@ -13,7 +72,8 @@ class ESP32Bridge(Node):
         self.declare_parameter('port', '/dev/esp32')
         self.declare_parameter('baudrate', 115200)
 
-        self.port = self.get_parameter('port').get_parameter_value().string_value
+        self.preferred_port = self.get_parameter('port').get_parameter_value().string_value
+        self.port = self.preferred_port
         self.baudrate = self.get_parameter('baudrate').get_parameter_value().integer_value
 
         self.ser = None
@@ -22,7 +82,7 @@ class ESP32Bridge(Node):
 
         self.create_timer(1.0, self.check_connection)
         self.create_timer(0.05, self.read_serial) # 0.1 -> 0.05로 응답성 상향
-        self.get_logger().info(f"ESP32 Bridge 노드 가동 (포트: {self.port})")
+        self.get_logger().info(f"ESP32 Bridge 노드 가동 (기본 포트: {self.preferred_port}, 자동 탐색 지원)")
 
     def connect_serial(self):
         try:
@@ -31,9 +91,21 @@ class ESP32Bridge(Node):
                     self.ser.close()
                 except Exception:
                     pass
+
+            target_port = find_esp32_port(self.preferred_port, self.baudrate)
+            self.port = target_port
+
             # 블로킹 방지를 위해 timeout, write_timeout 명시
             # [BUG FIX] write_timeout 0.05 → 0.1 : ESP32 처리 지연 시 SerialTimeoutException 방지
-            self.ser = serial.Serial(self.port, self.baudrate, timeout=0.05, write_timeout=0.1)
+            s = serial.Serial()
+            s.port = self.port
+            s.baudrate = self.baudrate
+            s.timeout = 0.05
+            s.write_timeout = 0.1
+            s.dtr = False
+            s.rts = False
+            s.open()
+            self.ser = s
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
             self.get_logger().info(f"✅ ESP32 시리얼 연결 성공: {self.port}")

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import glob
+import os
 import sys
 import time
 import select
@@ -11,6 +13,14 @@ import serial
 # ==========================================
 SERIAL_PORT = "/dev/esp32"
 BAUDRATE = 115200
+
+
+def resolve_esp32_port(port=SERIAL_PORT):
+    if port and os.path.exists(port):
+        return port
+    excluded = {os.path.realpath(s) for s in ("/dev/rplidar", "/dev/imu", "/dev/ublox_gps", "/dev/gps") if os.path.exists(s)}
+    candidates = [c for c in sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")) if os.path.realpath(c) not in excluded]
+    return candidates[0] if candidates else port
 
 # 기어(속도) 설정
 GEARS = {'1': 80, '2': 130, '3': 180, '4': 255}
@@ -53,10 +63,11 @@ class TeleopManual:
 
     def connect_serial(self):
         try:
-            self.ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=0.05, write_timeout=0.05)
+            port = resolve_esp32_port(SERIAL_PORT)
+            self.ser = serial.Serial(port, BAUDRATE, timeout=0.05, write_timeout=0.05)
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
-            print(f"\r\n[SYSTEM] ✅ ESP32 시리얼 연결 성공: {SERIAL_PORT}\r\n")
+            print(f"\r\n[SYSTEM] ✅ ESP32 시리얼 연결 성공: {port}\r\n")
             time.sleep(0.5)
         except Exception as e:
             print(f"\r\n[SYSTEM] ❌ ESP32 시리얼 연결 실패: {e}\r\n")

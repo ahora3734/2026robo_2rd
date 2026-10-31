@@ -13,10 +13,19 @@
 #   후진 방향 확인 (바퀴가 뒤로 도는지):
 #     python3 esp32_steer_test.py steer 0 --pwm -30 --sec 2
 import argparse
+import glob
 import json
+import os
 import sys
 import time
 import serial
+
+def resolve_esp32_port(port):
+    if port and os.path.exists(port):
+        return port
+    excluded = {os.path.realpath(s) for s in ("/dev/rplidar", "/dev/imu", "/dev/ublox_gps", "/dev/gps") if os.path.exists(s)}
+    candidates = [c for c in sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")) if os.path.realpath(c) not in excluded]
+    return candidates[0] if candidates else port
 
 ap = argparse.ArgumentParser()
 ap.add_argument("mode", choices=["pot", "steer"])
@@ -27,7 +36,10 @@ ap.add_argument("--hold", action="store_true", help="정지 조향 허용 (PWM 0
 ap.add_argument("--port", default="/dev/esp32")
 args = ap.parse_args()
 
-ser = serial.Serial(args.port, 115200, timeout=0.02)
+target_port = resolve_esp32_port(args.port)
+if target_port != args.port:
+    print(f"🔍 {args.port} 미발견 -> 자동 탐색된 포트({target_port})로 연결합니다.")
+ser = serial.Serial(target_port, 115200, timeout=0.02)
 time.sleep(2.0)  # 포트를 열면 ESP32가 리셋되므로 부팅 대기
 ser.reset_input_buffer()
 

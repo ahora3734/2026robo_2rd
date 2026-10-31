@@ -89,11 +89,11 @@ INDEX_HTML = r"""
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset=\"utf-8\">
-<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>학교 자율주행 통합 관제탑</title>
-<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">
-<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#08080a;color:#fff;font-family:Segoe UI,sans-serif;overflow:hidden}
@@ -811,10 +811,79 @@ def video_feed():
     return Response(generate_camera_stream(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route("/api/data")
+def api_data():
+    with gps_lock: gps = dict(gps_data)
+    with route_lock: route = dict(route_data)
+    with telemetry_lock:
+        tele = dict(telemetry_data)
+        if ros_node is not None:
+            tele["imu_active"] = (time.time() - ros_node.last_imu_time) <= 1.0
+        else:
+            tele["imu_active"] = False
+
+    with map_lock: slam_map = latest_map
+    return jsonify({
+        "gps": gps,
+        "route": route,
+        "has_dest": has_destination,
+        "telemetry": tele,
+        "slam_map": slam_map,
+        "scan": latest_scan,
+    })
+
+@app.route("/api/set_destination", methods=["POST"])
+def set_destination_api():
+    data = request.json or {}
+    if ros_node is not None:
+        ros_node.pub_dest.publish(String(data=json.dumps(data, ensure_ascii=False)))
+        return jsonify({"status": "ok"})
+    return jsonify({"status": "error", "msg": "ROS 노드 미구동"})
+
+@app.route("/api/estop", methods=["POST"])
+def estop_api():
+    cmd = str((request.json or {}).get("cmd", "")).strip().upper()
+    if cmd not in ("STOP", "RELEASE"):
+        return jsonify({"status": "error", "msg": "cmd는 STOP 또는 RELEASE"}), 400
+    if ros_node is not None:
+        ros_node.pub_estop.publish(String(data=cmd))
+        return jsonify({"status": "ok"})
+    return jsonify({"status": "error", "msg": "ROS 노드 미구동"}), 503
+
+@app.route("/api/search_poi", methods=["POST"])
+def search_poi():
+    keyword = (request.json or {}).get("keyword", "").strip()
+    if not keyword or not TMAP_APP_KEY: return jsonify({"results": []})
+
+    params = {
+        "version": 1, "searchKeyword": keyword, "count": 5,
+        "reqCoordType": "WGS84GEO", "resCoordType": "WGS84GEO", "searchCoordType": "WGS84GEO"
+    }
+    try:
+        r = requests.get(
+            "https://apis.openapi.sk.com/tmap/pois",
+            headers={"appKey": TMAP_APP_KEY},
+            params=params,
+            timeout=5,
+        )
+        r.raise_for_status()
+        pois = r.json().get("searchPoiInfo", {}).get("pois", {}).get("poi", [])
+        results = []
+        for p in pois:
+            try:
+                lat = float(p.get("frontLat") or p.get("noorLat"))
+                lon = float(p.get("frontLon") or p.get("noorLon"))
+            except Exception: continue
+            results.append({"name": p.get("name"), "lat": lat, "lon": lon})
+        return jsonify({"results": results})
+    except Exception:
+        return jsonify({"results": []})
+
 def main(args=None):
+    global ros_node
     rclpy.init(args=args)
-    node = WebDashboardNode()
-    ros_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    ros_node = WebDashboardNode()
+    ros_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)
     ros_thread.start()
     app.run(host="0.0.0.0", port=5000, threaded=True, use_reloader=False)
 
