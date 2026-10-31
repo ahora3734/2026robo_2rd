@@ -65,21 +65,6 @@ const unsigned long WATCHDOG_TIMEOUT_MS = 500;
 unsigned long last_telemetry_time = 0;
 const unsigned long TELEMETRY_INTERVAL_MS = 50; // 20Hz 주기로 젯슨에 상태 전송
 
-// 기어 파손 방지: 스톨 차단 (연속 구동 시간이 아니라 '진행 없음'으로 판정)
-// - 모터를 돌리는데 STEER_STALL_TIMEOUT_MS 동안 pot ADC가 STEER_STALL_MIN_PROGRESS_ADC 이상 변하지 않으면 스톨
-// - 커브에서 목표각이 계속 바뀌어 모터가 오래 돌아도, 핸들이 움직이고 있으면 스톨로 보지 않음
-// [BUG FIX] 300 → 500ms : 고마찰/무거운 조향 시 초기 움직임 지연으로 인한 오탐(False Stall) 방지
-const unsigned long STEER_STALL_TIMEOUT_MS = 500;
-const float STEER_STALL_MIN_PROGRESS_ADC = 15.0;
-unsigned long steer_motor_start_time = 0;   // 마지막으로 진행이 확인된 시각 (0이면 모터 정지 상태)
-float steer_progress_ref_adc = 0.0;         // 마지막으로 진행이 확인된 시점의 ADC
-
-// [REVIEW #5] 스톨 발생 시: 구동 모터까지 정지 + 텔레메트리 fault 보고 + 일정 시간 후 재시도
-// [BUG FIX] 1000 → 2000ms : 스톨 후 재시도 간격 확대, 기어 쿨다운 시간 충분히 확보
-const unsigned long STEER_STALL_COOLDOWN_MS = 2000;
-bool steer_stall_fault = false;
-unsigned long steer_stall_time = 0;
-
 // [REVIEW #24] 구동 모터 PWM 주파수 및 정/역 전환 데드타임
 // - 모터 드라이버가 지원하는 주파수인지 데이터시트 확인 (BTS7960 등은 ~25kHz 지원)
 #define MOTOR_PWM_FREQ_HZ  20000
@@ -139,7 +124,6 @@ void loop() {
     stopAllMotors();
   } else {
     if (is_armed) {
-      // 조향을 먼저 처리해야 스톨 발생 시 같은 주기에 구동 모터도 정지됨
       controlSteerClosedLoop();
       controlDriveMotors();
     } else {
@@ -237,23 +221,12 @@ void updatePotentiometer() {
 // 3. 조향 모터 폐루프(Closed-Loop) 비례 제어 (가변저항 피드백)
 // ==============================================================================
 void controlSteerClosedLoop() {
-  // [REVIEW #5] 스톨 fault 상태: 조향 모터 OFF 유지, 쿨다운 후 재시도 (구동 모터는 controlDriveMotors에서 정지)
-  if (steer_stall_fault) {
-    if (millis() - steer_stall_time < STEER_STALL_COOLDOWN_MS) {
-      analogWrite(STEER_PWM_PIN, 0);
-      return;
-    }
-    steer_stall_fault = false;
-    steer_motor_start_time = 0;
-  }
-
   // [기어 보호 1] 차량 정지 시(PWM == 0) 조향 모터 완전 OFF
   // - 정지 마찰력으로 인한 기어 파손/발열 방지
   // - 사람이 손으로 핸들을 자유롭게 돌려 대시보드 화면을 보며 영점(Center) 튜닝 가능!
-  // - 예외: 젯슨이 정지 조향(HOLD=1)을 요청한 경우에만 정지 상태에서 조향 (스톨 감시는 그대로 적용)
+  // - 예외: 젯슨이 정지 조향(HOLD=1)을 요청한 경우에만 정지 상태에서 조향
   if (abs(target_drive_pwm) == 0 && !steer_hold_requested) {
     analogWrite(STEER_PWM_PIN, 0);
-    steer_motor_start_time = 0;
     return;
   }
 
@@ -266,32 +239,12 @@ void controlSteerClosedLoop() {
   if ((filtered_pot_adc >= POT_MAX_LIMIT && wants_adc_up) ||
       (filtered_pot_adc <= POT_MIN_LIMIT && !wants_adc_up)) {
     analogWrite(STEER_PWM_PIN, 0);
-    steer_motor_start_time = 0;
     return;
   }
 
   // [기어 보호 3] 불감대(Deadband) 내에 도달하면 조향 모터 정지
   if (abs(error) <= STEER_DEADBAND_DEG) {
     analogWrite(STEER_PWM_PIN, 0);
-    steer_motor_start_time = 0;
-    return;
-  }
-
-  // [기어 보호 4] 스톨(Stall) / 기어 걸림 방지: 모터를 돌리는데 핸들이 움직이지 않는지 감시
-  if (steer_motor_start_time == 0) {
-    steer_motor_start_time = millis();
-    steer_progress_ref_adc = filtered_pot_adc;
-  } else if (fabsf(filtered_pot_adc - steer_progress_ref_adc) >= STEER_STALL_MIN_PROGRESS_ADC) {
-    // 핸들이 움직이고 있음 -> 진행 기준점 갱신
-    steer_motor_start_time = millis();
-    steer_progress_ref_adc = filtered_pot_adc;
-  } else if (millis() - steer_motor_start_time > STEER_STALL_TIMEOUT_MS) {
-    // 0.3초 동안 핸들이 거의 움직이지 않으면 기어 파손 방지 차단
-    // [REVIEW #5] fault로 기록 -> 구동 모터 정지 + 텔레메트리 보고 + 쿨다운 후 재시도
-    analogWrite(STEER_PWM_PIN, 0);
-    steer_stall_fault = true;
-    steer_stall_time = millis();
-    steer_motor_start_time = 0;
     return;
   }
 
@@ -313,14 +266,6 @@ void controlSteerClosedLoop() {
 // 4. 좌/우 주행 모터 구동
 // ==============================================================================
 void controlDriveMotors() {
-  // [REVIEW #5] 조향 스톨 중에는 구동도 정지 (조향 없이 달리는 상황 방지)
-  if (steer_stall_fault) {
-    analogWrite(LEFT_PWM_PIN, 0);
-    analogWrite(RIGHT_PWM_PIN, 0);
-    last_drive_dir = 0;
-    return;
-  }
-
   int pwm_out = abs(target_drive_pwm);
   pwm_out = constrain(pwm_out, 0, 255);
   int dir = (target_drive_pwm > 0) ? 1 : ((target_drive_pwm < 0) ? -1 : 0);
@@ -359,7 +304,6 @@ void stopAllMotors() {
   analogWrite(LEFT_PWM_PIN, 0);
   analogWrite(RIGHT_PWM_PIN, 0);
   analogWrite(STEER_PWM_PIN, 0);
-  steer_motor_start_time = 0;
 }
 
 // ==============================================================================
@@ -379,9 +323,5 @@ void sendTelemetryToJetson() {
   Serial.print(is_armed ? 1 : 0);
   Serial.print(F(",\"hold\":"));
   Serial.print(steer_hold_requested ? 1 : 0);
-  // [REVIEW #5] 조향 스톨 발생 시 fault 필드 보고 (main_fusion이 SENSOR_FAULT로 정지)
-  if (steer_stall_fault) {
-    Serial.print(F(",\"fault\":\"STEER_STALL\""));
-  }
   Serial.println(F("}"));
 }
