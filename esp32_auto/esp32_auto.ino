@@ -41,9 +41,9 @@ const float STEER_DEADBAND_DEG = 1.0;
 const float MAX_STEER_ANGLE_DEG = 35.0;
 
 // 조향 모터 P 게인 (오차에 따른 모터 속도 비례 상수)
-const float STEER_KP = 5.0; 
-const int STEER_MIN_PWM = 65;   // 조향 모터가 기어를 돌리기 시작하는 최소 PWM
-const int STEER_MAX_PWM = 180;  // 조향 모터 안전 최대 PWM
+const float STEER_KP = 6.5; 
+const int STEER_MIN_PWM = 85;   // 지면 마찰 부하에서도 기어를 돌리기 시작하는 최소 PWM (65 -> 85 상향)
+const int STEER_MAX_PWM = 230;  // 조향 모터 안전 최대 PWM (180 -> 230 상향)
 
 // 방향 반전 옵션 (테스트 후 핸들이 반대로 돌면 true <-> false 전환)
 #define REVERSE_STEER_MOTOR  false
@@ -55,6 +55,8 @@ int target_drive_pwm = 0;
 float target_steer_angle = 0.0;
 // 정지 조향 허용: <PWM,STEER,1> 수신 시 PWM 0에서도 조향 모터 구동 (장애물 회피 전 핸들 미리 꺾기)
 bool steer_hold_requested = false;
+unsigned long last_steer_change_time = 0;
+const unsigned long STEER_SETTLE_GRACE_MS = 1500; // 목표 조향각 변경 후 정지 상태에서도 추종을 유지할 시간
 
 float current_steer_angle = 0.0;
 float filtered_pot_adc = 2048.0;
@@ -173,8 +175,12 @@ void parseSerialDataSafe() {
       }
 
       if (valid) {
+        float new_steer = constrain(steer_in, -MAX_STEER_ANGLE_DEG, MAX_STEER_ANGLE_DEG);
+        if (abs(new_steer - target_steer_angle) >= 0.3f || (target_drive_pwm != 0 && pwm_in == 0)) {
+          last_steer_change_time = millis();
+        }
         target_drive_pwm = pwm_in;
-        target_steer_angle = constrain(steer_in, -MAX_STEER_ANGLE_DEG, MAX_STEER_ANGLE_DEG);
+        target_steer_angle = new_steer;
         steer_hold_requested = (hold_in != 0);
         last_comm_time = millis();
         is_armed = true;
@@ -224,8 +230,10 @@ void controlSteerClosedLoop() {
   // [기어 보호 1] 차량 정지 시(PWM == 0) 조향 모터 완전 OFF
   // - 정지 마찰력으로 인한 기어 파손/발열 방지
   // - 사람이 손으로 핸들을 자유롭게 돌려 대시보드 화면을 보며 영점(Center) 튜닝 가능!
-  // - 예외: 젯슨이 정지 조향(HOLD=1)을 요청한 경우에만 정지 상태에서 조향
-  if (abs(target_drive_pwm) == 0 && !steer_hold_requested) {
+  // - 예외 1: 젯슨이 정지 조향(HOLD=1)을 요청한 경우
+  // - 예외 2: 목표 조향각이 방금 변경되었거나 방금 정지하여(1.5초 이내) 목표 각도로 복귀 중인 경우
+  bool in_settle_grace = (millis() - last_steer_change_time) < STEER_SETTLE_GRACE_MS;
+  if (abs(target_drive_pwm) == 0 && !steer_hold_requested && !in_settle_grace) {
     analogWrite(STEER_PWM_PIN, 0);
     return;
   }
