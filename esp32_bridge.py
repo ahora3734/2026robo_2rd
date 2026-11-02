@@ -77,6 +77,7 @@ class ESP32Bridge(Node):
         self.baudrate = self.get_parameter('baudrate').get_parameter_value().integer_value
 
         self.ser = None
+        self.ramped_steer = 0.0
         self.sub_cmd = self.create_subscription(String, '/vehicle_cmd', self.cmd_callback, 10)
         self.pub_status = self.create_publisher(String, '/esp32_raw_status', 10)
 
@@ -133,14 +134,24 @@ class ESP32Bridge(Node):
             # 기존 ±100 → ±35 : main_fusion에서 이미 클램프하지만, 방어적으로 여기서도 동일하게 맞춤
             steer = max(-35.0, min(35.0, steer))
 
+            # 핸들이 끊기지 않고 부드럽게 돌아가도록 목표 각도 변화율(2.5°/tick) 적용
+            max_step = 2.5
+            if abs(steer - self.ramped_steer) <= max_step:
+                self.ramped_steer = steer
+            elif steer > self.ramped_steer:
+                self.ramped_steer += max_step
+            else:
+                self.ramped_steer -= max_step
+            sent_steer = self.ramped_steer
+
             # 하드웨어는 음수 PWM이 전진 (drive.py와 동일하게 부호 반전, 양수 = 전진은 main_fusion 규약)
             pwm = -pwm
 
             # 정지 조향 요청 시에만 세 번째 필드(HOLD=1) 추가 (펌웨어는 두 형식 모두 지원)
             if steer_hold:
-                command_str = f"<{pwm},{steer:.2f},1>\n"
+                command_str = f"<{pwm},{sent_steer:.2f},1>\n"
             else:
-                command_str = f"<{pwm},{steer:.2f}>\n"
+                command_str = f"<{pwm},{sent_steer:.2f}>\n"
             self.ser.write(command_str.encode('utf-8'))
         except json.JSONDecodeError:
             self.get_logger().error(f"JSON 파싱 에러: {msg.data[:80]}")

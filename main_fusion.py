@@ -79,9 +79,9 @@ class MainFusionNode(Node):
         # ESP32 텔레메트리 감시 (조향 스톨/추종 실패)
         self.declare_parameter("require_esp32_telemetry", True)
         self.declare_parameter("esp32_timeout_sec", 1.0)
-        self.declare_parameter("steer_track_error_deg", 10.0)
-        self.declare_parameter("steer_track_timeout_sec", 2.0)
-        self.declare_parameter("steer_fault_hold_sec", 3.0)
+        self.declare_parameter("steer_track_error_deg", 20.0)
+        self.declare_parameter("steer_track_timeout_sec", 4.0)
+        self.declare_parameter("steer_fault_hold_sec", 1.5)
         # GPS 품질
         self.declare_parameter("require_gps_fix", True)
         self.declare_parameter("non_rtk_max_pwm", 110)        # RTK FIX/Float가 아니면 속도 제한
@@ -210,6 +210,7 @@ class MainFusionNode(Node):
         self.esp32_steer_time = 0.0
 
         self.steer_err_since = None
+        self.steer_err_anchor_cur = 0.0
         self.steer_fault_until = 0.0
         self.steer_fault_text = ""
         self.remote_estop = False
@@ -532,11 +533,20 @@ class MainFusionNode(Node):
         if fault:
             self.steer_fault_until = now + self.steer_fault_hold
             self.steer_fault_text = fault
-        # 구동 중인데 조향이 목표를 계속 따라가지 못하면 고장으로 판단
+        # 구동 중 조향 스톨 감시:
+        # 바퀴가 조금이라도 움직이고 있으면(>=1.0°) 정상 추종 중이므로 타이머를 리셋하고,
+        # 완전히 멈춰 있는 경우에만 고장으로 판단 (고장 정지 중에는 control_loop에서 steer_hold로 조향 복귀 허용)
         if armed and pwm != 0 and abs(tgt - cur) > self.steer_track_err:
             if self.steer_err_since is None:
                 self.steer_err_since = now
+                self.steer_err_anchor_cur = cur
+            elif abs(cur - self.steer_err_anchor_cur) >= 1.0:
+                self.steer_err_since = now
+                self.steer_err_anchor_cur = cur
             elif now - self.steer_err_since > self.steer_track_timeout:
+                self.get_logger().warn(
+                    f"⚠️ 조향 추종 실패 감지 (목표: {tgt:.1f}°, 현재: {cur:.1f}°) - 정지"
+                )
                 self.steer_fault_until = now + self.steer_fault_hold
                 self.steer_fault_text = "STEER_TRACK"
                 self.steer_err_since = None
@@ -795,7 +805,8 @@ class MainFusionNode(Node):
         faults = self.sensor_faults()
         if faults:
             self.state = "SENSOR_FAULT"
-            self.publish_state(self.hard_stop(), 0.0, "센서 데이터 오류: " + ", ".join(faults))
+            # 조향 고장으로 정지한 동안에는 조향 모터를 살려 두어 중앙 복귀를 허용 (바퀴가 꺾인 채 굳는 것 방지)
+            self.publish_state(self.hard_stop(), 0.0, "센서 데이터 오류: " + ", ".join(faults), steer_hold=now < self.steer_fault_until)
             return
         if self.cur_lat is None:
             self.state = "WAITING_FOR_GPS"

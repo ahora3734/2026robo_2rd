@@ -41,9 +41,9 @@ const float STEER_DEADBAND_DEG = 1.0;
 const float MAX_STEER_ANGLE_DEG = 35.0;
 
 // 조향 모터 P 게인 (오차에 따른 모터 속도 비례 상수)
-const float STEER_KP = 6.5; 
+const float STEER_KP = 5.0;
 const int STEER_MIN_PWM = 85;   // 지면 마찰 부하에서도 기어를 돌리기 시작하는 최소 PWM (65 -> 85 상향)
-const int STEER_MAX_PWM = 230;  // 조향 모터 안전 최대 PWM (180 -> 230 상향)
+const int STEER_MAX_PWM = 180;  // 조향 모터 안전 최대 PWM (스톨 차단이 없으므로 실측 전까지 180 유지)
 
 // 방향 반전 옵션 (테스트 후 핸들이 반대로 돌면 true <-> false 전환)
 #define REVERSE_STEER_MOTOR  false
